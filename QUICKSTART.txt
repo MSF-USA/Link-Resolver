@@ -62,7 +62,7 @@ Windows:
 Linux:
   ./link-resolver-cli --file urls.txt --output results.csv
 CSV files work too; add --column NAME when the file has several link columns.
-Use --help for more options.
+Use --help for more options and --version to see which release you have.
 
 IF THE WINDOW WILL NOT OPEN (technical notes)
 Linux needs a normal desktop session (X11 or Wayland) with OpenGL support and

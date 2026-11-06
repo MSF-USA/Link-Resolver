@@ -105,6 +105,7 @@ for public redirect links; links requiring authentication can still fail.
 ./link-resolver-cli --file urls.txt --output results.csv
 ./link-resolver-cli --file links.csv --column Website --output results.csv
 ./link-resolver-cli --help
+./link-resolver-cli --version
 ```
 
 ```powershell
@@ -158,12 +159,39 @@ cargo zigbuild --release --locked --target x86_64-unknown-linux-gnu.2.28
 glibc 2.28, static musl CLI), checks the Windows subsystems and the glibc ceiling,
 lists the Windows DLL imports, and writes the four archives and `SHA256SUMS` into
 `dist/`. It needs the two extra Rust targets, MinGW, Zig, `cargo-zigbuild` and `zip`.
+`--linux-only` skips the Windows half; `packaging/package-windows.ps1` builds that half
+natively on Windows with the MSVC toolchain, which is what published releases use.
 
 The GUI loads the desktop's graphics libraries at runtime and cannot use the
 CLI's fully static musl approach. Distribution GUI builds require glibc 2.28+;
 normal native Linux builds may require newer glibc. The included Linux CLI can
 still be built statically using musl with GUI features disabled. Windows builds
 target Windows 10/11 x64. Other CPU architectures require their own builds.
+
+## Continuous integration and releases
+
+GitHub Actions in `.github/workflows/` run on every push and pull request:
+
+- **CI** (`ci.yml`): rustfmt, clippy with warnings as errors (GUI and CLI-only builds),
+  the full test suite and the script tests on Linux and Windows, a release build whose
+  binaries are kept for a week, and a build on the minimum Rust version. Windows is where
+  the PowerShell script test runs.
+- **Security audit** (`audit.yml`): `cargo audit` against the RustSec database weekly,
+  whenever `Cargo.lock` changes, and on demand.
+- **Release** (`release.yml`): manual only, never on a push to `main`. Builds the Linux
+  archives with `packaging/package-dist.sh --linux-only` and the Windows archives natively
+  on a Windows runner with `packaging/package-windows.ps1`, runs every test suite on both
+  (loopback servers only, no real URLs), then tags and publishes a GitHub release with
+  generated notes and the SHA-256 table. Versions are `v1.DATE`: `v1.20261106` for the
+  first release on 6 November 2026, `v1.20261106.2` for a second one that day. The crate
+  version inside the binaries (and the HTTP user agent) is set to the release version at
+  build time by `packaging/stamp-version.py`; nothing is committed back. The step-by-step
+  maintainer guide is [`docs/releasing.md`](docs/releasing.md).
+
+`.github/dependabot.yml` groups weekly minor and patch updates of crates into one pull
+request, keeps major bumps separate, and updates the actions themselves. Dependabot
+security alerts and security pull requests are repository settings and must be switched
+on under Settings > Code security.
 
 ## Original scripts
 

@@ -1,0 +1,50 @@
+LINK RESOLVER (terminal edition)
+Find the real destination of a redirect link.
+
+This is the terminal-only edition. The desktop edition with a window is in the
+separate "gui" archive and also includes this program as link-resolver-cli.
+
+No installation, administrator permission, Rust or curl is required.
+You need an internet connection. Only use links you trust.
+Your organization's security settings may block unsigned programs.
+
+WINDOWS 10/11 (64-bit)
+Extract the ZIP into a folder you can write to, such as your Downloads folder.
+Double-click link-resolver.exe to open its menu.
+
+LINUX (x86-64)
+Extract the archive, open a terminal in that folder, and run:
+  ./link-resolver
+If it says "Permission denied", give your copy execute permission:
+  chmod +x link-resolver
+Then run it again. Neither command needs administrator permission.
+
+THE MENU
+1. Paste URLs: paste one full link per line. Enter an empty line to start.
+2. Load a text file: type the file's full path. Outer quotes are accepted.
+3. Save last results as CSV: choose a new file name, such as results.csv.
+4. Exit: close the program when finished.
+
+Use full links starting with https:// or http://.
+Text files use one link per line. The included urls.txt is an example.
+CSV and TSV files work too (links.csv is an example): the column holding
+links is used automatically; add --column NAME if several columns qualify.
+Links can be written as https://example.com, www.example.com or example.com.
+Blank lines and lines starting with # are ignored.
+Results are shown on screen. Choose 3 before exiting if you want to keep them.
+Save into a folder you can write to. Existing files are never overwritten.
+CSV files can be opened in Excel, LibreOffice or a text editor.
+CSV includes the input link, destination link, status and any error.
+
+Each link can take up to 30 seconds. Failed links do not stop the batch.
+Only the last batch is kept in memory; save it before starting another batch.
+A resolved link may still lead to a blocked or missing page.
+The program does not run web-page scripts or bypass sign-in pages.
+It contacts redirect destinations, which could include local-network addresses.
+
+COMMAND-LINE USAGE
+Windows:
+  link-resolver.exe --file urls.txt --output results.csv
+Linux:
+  ./link-resolver --file urls.txt --output results.csv
+Use --help for more options.

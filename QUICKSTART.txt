@@ -1,0 +1,71 @@
+LINK RESOLVER
+Find the real destination of a redirect link.
+
+No installation, administrator permission, Rust or curl is required.
+You need an internet connection. Only use links you trust.
+Your organization's security settings may block unsigned programs.
+
+WINDOWS 10/11 (64-bit)
+Extract the ZIP into a folder you can write to, such as your Downloads folder.
+Double-click link-resolver.exe to open its window.
+
+LINUX DESKTOP (x86-64)
+Extract the archive and launch link-resolver from your file manager.
+Alternatively, open a terminal in that folder and run:
+  ./link-resolver
+If it says "Permission denied", give your copy execute permission:
+  chmod +x link-resolver
+Then run it again. Neither command needs administrator permission.
+
+THE WINDOW
+Paste links into the text box, one per line, or click "Load file".
+"Load file" accepts a text file with one link per line, or a CSV or TSV
+spreadsheet file. With a spreadsheet, the column that holds links is used
+automatically. If several columns hold links, or none does, a dialog shows
+the first rows of the file as a grid: click a column to select it, and untick
+"First row is a header" if the file has none. Rows without a link are skipped
+and their row numbers are listed in the message under the buttons.
+Click "Resolve" and watch the results appear below.
+Click "Copy" for one destination, or "Copy URLs" for all resolved destinations.
+Click "Save CSV" to save all results, including any errors.
+"Stop" stops after the current link finishes (up to 30 seconds).
+Close the window when finished. Save or copy first if you want to keep results.
+
+Links can be written as https://example.com/page, www.example.com or
+example.com/page. Text files use one link per line; the included urls.txt
+and links.csv are examples.
+Blank lines and lines starting with # are ignored.
+Results are shown on screen. Save CSV before exiting if you want to keep them.
+Save into a folder you can write to. Existing files are never overwritten.
+CSV files can be opened in Excel, LibreOffice or a text editor.
+CSV includes the input link, destination link, status and any error.
+
+Each link can take up to 30 seconds. Failed links do not stop the batch.
+The window remains responsive while working.
+Only the last batch is kept in memory; save it before starting another batch.
+A resolved link may still lead to a blocked or missing page.
+The program does not run web-page scripts or bypass sign-in pages.
+It contacts redirect destinations, which could include local-network addresses.
+
+SETTINGS, KEYBOARD AND DISPLAY
+Click "Settings" (top right) to choose light or dark mode, change the text
+size, or reduce motion. Your choices and the window size are remembered.
+Tab moves between the controls; Enter or Space presses the highlighted one.
+Ctrl+Enter starts resolving while you are typing in the text box.
+Ctrl and + makes everything larger, Ctrl and - smaller, Ctrl and 0 resets.
+By default the window follows your system's light or dark mode.
+The window works with screen readers such as NVDA, Narrator and Orca.
+
+OPTIONAL COMMAND-LINE USAGE
+Windows:
+  link-resolver-cli.exe --file urls.txt --output results.csv
+Linux:
+  ./link-resolver-cli --file urls.txt --output results.csv
+CSV files work too; add --column NAME when the file has several link columns.
+Use --help for more options.
+
+IF THE WINDOW WILL NOT OPEN (technical notes)
+Linux needs a normal desktop session (X11 or Wayland) with OpenGL support and
+glibc 2.28 or newer. File dialogs use the desktop's XDG portal. If file dialogs
+are unavailable, you can still paste links into the box and copy results out.
+The optional command-line program also works without a graphical desktop.

@@ -38,7 +38,7 @@ impl Resolver {
             .user_agent(format!(
                 "{}/{}",
                 crate::APP_NAME.replace(' ', ""),
-                env!("CARGO_PKG_VERSION")
+                crate::VERSION
             ))
             .redirect(redirect::Policy::custom(move |attempt| {
                 if !matches!(attempt.url().scheme(), "http" | "https") {

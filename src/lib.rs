@@ -4,6 +4,9 @@
 /// Binary and crate names in `Cargo.toml` and `packaging/` are the kebab-case form of this.
 pub const APP_NAME: &str = "Link Resolver";
 
+/// The crate version, which releases set to `1.YYYYMMDD.N` to match their tag.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod input;
 pub mod links;
 pub mod resolver;

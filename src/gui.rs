@@ -10,12 +10,12 @@ use std::thread;
 use std::time::Duration;
 
 use eframe::egui::{self, Color32, Id, Key, Modifiers, Response, RichText, Sense, Stroke};
-use link_resolver::APP_NAME;
 use link_resolver::input::{Loaded, load_file, parse_urls};
 use link_resolver::links::is_link;
 use link_resolver::resolver::Resolver;
 use link_resolver::results::{Resolution, save_csv};
 use link_resolver::table::{PREVIEW_ROWS, Table, abbreviate};
+use link_resolver::{APP_NAME, VERSION};
 
 use crate::settings::Settings;
 use crate::theme::{self, Palette, bold_text, secondary_text};
@@ -517,7 +517,10 @@ impl RedirectApp {
                 ui.separator();
                 let mut done = false;
                 ui.horizontal(|ui| {
-                    ui.label(secondary_text("Your choices are remembered.", palette));
+                    ui.label(secondary_text(
+                        &format!("Your choices are remembered. Version {VERSION}."),
+                        palette,
+                    ));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let button = primary_button(ui, true, "Done", palette)
                             .on_hover_text("Close settings (Escape).");

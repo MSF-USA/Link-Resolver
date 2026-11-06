@@ -1,6 +1,6 @@
 //! Interactive and command-line entry points for the URL resolver.
 
-use link_resolver::{APP_NAME, input, resolver, results};
+use link_resolver::{APP_NAME, VERSION, input, resolver, results};
 
 use std::env;
 use std::io::{self, Write};
@@ -21,6 +21,7 @@ Command-line usage:
   link-resolver-cli --file urls.txt [--output results.csv]
   link-resolver-cli --file links.csv [--column Website] [--no-header] [--output results.csv]
   link-resolver-cli --output results.csv URL [URL ...]
+  link-resolver-cli --version
 
 Text files contain one link per line. Blank lines and # comments are ignored.
 CSV and TSV files are read as tables: the column holding links is used
@@ -43,6 +44,7 @@ struct Options {
     header: Option<bool>,
     output: Option<PathBuf>,
     help: bool,
+    version: bool,
 }
 
 fn parse_options(arguments: Vec<String>) -> Result<Options, String> {
@@ -51,6 +53,7 @@ fn parse_options(arguments: Vec<String>) -> Result<Options, String> {
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--help" | "-h" => options.help = true,
+            "--version" | "-V" => options.version = true,
             "--file" | "-f" => options.files.push(PathBuf::from(
                 arguments.next().ok_or("--file needs a file path.")?,
             )),
@@ -322,6 +325,10 @@ fn run(arguments: Vec<String>) -> Result<bool, String> {
         return Ok(true);
     }
     let options = parse_options(arguments)?;
+    if options.version {
+        println!("{APP_NAME} {VERSION}");
+        return Ok(true);
+    }
     if options.help {
         print!("{HELP}");
         return Ok(true);
@@ -400,6 +407,7 @@ mod tests {
         ] {
             assert!(parse_options(arguments.into_iter().map(String::from).collect()).is_err());
         }
+        assert!(parse_options(vec!["--version".into()]).unwrap().version);
         let options = parse_options(vec!["--column".into(), "Website".into()]).unwrap();
         assert_eq!(options.column.as_deref(), Some("Website"));
         assert_eq!(options.header, None);

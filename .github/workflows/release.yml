@@ -1,0 +1,207 @@
+# Build the distribution archives natively on each platform and publish a GitHub release.
+# Maintainer guide: docs/releasing.md.
+#
+# Versioning is v1.DATE: the first release on a day is v1.YYYYMMDD, a second one the same
+# day is v1.YYYYMMDD.2, and so on. Releases are manual. Two ways to start one:
+#   - "Run workflow" in the Actions tab: the version is computed from today's UTC date, the
+#     tag is created on the chosen ref after the builds pass, and the release is published.
+#   - Push a tag that already follows the scheme (git tag v1.20261106 && git push --tags).
+# A push to main never releases.
+#
+# The crate version baked into the binaries (and the HTTP user agent) is set to the release
+# version at build time with packaging/stamp-version.py; nothing is committed back.
+# Linux archives come from packaging/package-dist.sh --linux-only, Windows archives from
+# packaging/package-windows.ps1 on a Windows runner (MSVC toolchain). Every test suite uses
+# loopback servers only; no job contacts a real URL.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: Release notes to show above the generated change list (optional)
+        required: false
+        default: ""
+      prerelease:
+        description: Mark the release as a pre-release
+        type: boolean
+        default: false
+  push:
+    tags: ["v1.*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # Zig and cargo-zigbuild versions verified together on the maintainer's machine.
+  ZIG_VERSION: "0.17.0"
+  CARGO_ZIGBUILD_VERSION: "0.24.1"
+  LINUX_PACKAGES: libxkbcommon-dev libwayland-dev libgtk-3-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+jobs:
+  version:
+    name: Decide the version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      crate_version: ${{ steps.version.outputs.crate_version }}
+      created_tag: ${{ steps.version.outputs.created_tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            tag="${GITHUB_REF_NAME}"
+            if [[ ! "$tag" =~ ^v1\.[0-9]{8}(\.[0-9]+)?$ ]]; then
+              echo "Tag $tag does not follow v1.YYYYMMDD or v1.YYYYMMDD.N" >&2
+              exit 1
+            fi
+            created_tag=false
+          else
+            base="v1.$(date -u +%Y%m%d)"
+            tag="$base"
+            suffix=2
+            while git rev-parse -q --verify "refs/tags/$tag" >/dev/null \
+                  || gh release view "$tag" >/dev/null 2>&1; do
+              tag="$base.$suffix"
+              suffix=$((suffix + 1))
+            done
+            created_tag=true
+          fi
+          crate_version=$(python3 -c "import sys; sys.path.insert(0, 'packaging'); import importlib; print(importlib.import_module('stamp-version').crate_version(sys.argv[1]))" "$tag")
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "crate_version=$crate_version" >> "$GITHUB_OUTPUT"
+          echo "created_tag=$created_tag" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag (crate version $crate_version)"
+
+  linux:
+    name: Linux archives
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils file $LINUX_PACKAGES
+          pip install "cargo-zigbuild==$CARGO_ZIGBUILD_VERSION"
+      - name: Stamp the release version
+        run: python3 packaging/stamp-version.py "${{ needs.version.outputs.crate_version }}"
+      - name: Test (loopback servers only)
+        run: |
+          cargo test --locked
+          cargo test --locked --no-default-features
+          python3 -m unittest discover -s tests -v
+      - name: Build the Linux archives
+        run: packaging/package-dist.sh --linux-only
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-archives
+          path: |
+            dist/link-resolver-gui-linux-x64.tar.gz
+            dist/link-resolver-linux-x64.tar.gz
+          if-no-files-found: error
+          retention-days: 3
+
+  windows:
+    name: Windows archives (native)
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+      - name: Stamp the release version
+        run: python packaging/stamp-version.py "${{ needs.version.outputs.crate_version }}"
+      - name: Test (loopback servers only)
+        run: |
+          cargo test --locked
+          cargo test --locked --no-default-features
+          python -m unittest discover -s tests -v
+      - name: Build the Windows archives
+        shell: pwsh
+        run: packaging/package-windows.ps1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-archives
+          path: |
+            dist/link-resolver-gui-windows-x64.zip
+            dist/link-resolver-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    name: Tag and publish
+    needs: [version, linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: release
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum link-resolver-gui-windows-x64.zip link-resolver-gui-linux-x64.tar.gz \
+                    link-resolver-windows-x64.zip link-resolver-linux-x64.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+      - name: Tag the release commit
+        if: needs.version.outputs.created_tag == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ needs.version.outputs.tag }}" -m "Release ${{ needs.version.outputs.tag }}"
+          git push origin "refs/tags/${{ needs.version.outputs.tag }}"
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ github.event.inputs.notes }}
+          PRERELEASE: ${{ github.event.inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.version.outputs.tag }}"
+          {
+            if [[ -n "$NOTES" ]]; then printf '%s\n\n' "$NOTES"; fi
+            printf '## Downloads\n\n'
+            printf '| Archive | Contents |\n|---|---|\n'
+            printf '| link-resolver-gui-windows-x64.zip | Desktop app and CLI for Windows 10/11 (built natively) |\n'
+            printf '| link-resolver-gui-linux-x64.tar.gz | Desktop app and CLI for Linux (glibc 2.28+) |\n'
+            printf '| link-resolver-windows-x64.zip | Terminal-only edition for Windows |\n'
+            printf '| link-resolver-linux-x64.tar.gz | Terminal-only edition for Linux, fully static |\n'
+            printf '\n## SHA-256\n\n```\n'
+            cat release/SHA256SUMS
+            printf '```\n'
+          } > release-notes.md
+          flags=(--title "$tag" --notes-file release-notes.md --generate-notes)
+          if [[ "$PRERELEASE" == "true" ]]; then flags+=(--prerelease); fi
+          gh release create "$tag" "${flags[@]}" \
+            release/link-resolver-gui-windows-x64.zip \
+            release/link-resolver-gui-linux-x64.tar.gz \
+            release/link-resolver-windows-x64.zip \
+            release/link-resolver-linux-x64.tar.gz \
+            release/SHA256SUMS

@@ -1,0 +1,28 @@
+# Check Cargo.lock against the RustSec advisory database: weekly, whenever the lockfile
+# changes, and on demand. Dependabot alerts cover the same ground from GitHub's side; this
+# job also catches advisories for crates Dependabot has no update for yet.
+name: Security audit
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  push:
+    paths: ["Cargo.lock", ".github/workflows/audit.yml"]
+  pull_request:
+    paths: ["Cargo.lock"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  checks: write
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

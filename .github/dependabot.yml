@@ -1,0 +1,33 @@
+# Dependabot keeps the Rust crates and the GitHub Actions used by the workflows current.
+# Security alerts and the automatic security PRs are repository settings, not configured
+# here: enable "Dependabot alerts" and "Dependabot security updates" under Settings >
+# Code security to get them.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 10
+    groups:
+      # Minor and patch bumps arrive as one PR a week; major bumps stay separate so the
+      # breaking-change notes are read one crate at a time.
+      rust-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    labels: ["dependencies", "rust"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    groups:
+      github-actions:
+        patterns: ["*"]
+    labels: ["dependencies", "ci"]

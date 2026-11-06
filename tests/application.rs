@@ -270,6 +270,12 @@ fn existing_export_is_not_overwritten() {
 
 #[test]
 fn help_missing_file_and_empty_file_have_predictable_exit_codes() {
+    let version = application().arg("--version").output().unwrap();
+    assert_eq!(version.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8(version.stdout).unwrap().trim(),
+        format!("Link Resolver {}", env!("CARGO_PKG_VERSION"))
+    );
     assert!(
         application()
             .arg("--help")

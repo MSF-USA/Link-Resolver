@@ -13,6 +13,8 @@
 # Usage: packaging/rehearse-release.sh [v1.YYYYMMDD[.N]]   (default: today's date)
 
 set -euo pipefail
+# Note for edits: never put `grep -q` at the end of a pipeline here. It exits on the first
+# match, the writer then dies of a broken pipe, and pipefail turns that into a failure.
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TAG=${1:-"v1.$(date -u +%Y%m%d)"}
@@ -42,7 +44,7 @@ for binary in dist/gui-linux-x64/link-resolver-cli dist/linux-x64/link-resolver;
         || { echo "$binary printed '$reported'" >&2; exit 1; }
     echo "$binary: $reported"
 done
-tar -tzf dist/link-resolver-gui-linux-x64.tar.gz | grep -qx 'link-resolver/link-resolver' \
+tar -tzf dist/link-resolver-gui-linux-x64.tar.gz | grep -x 'link-resolver/link-resolver' >/dev/null \
     || { echo "GUI archive does not unpack to link-resolver/" >&2; exit 1; }
 (cd dist && sha256sum -c SHA256SUMS --quiet) && echo "SHA256SUMS verify"
 

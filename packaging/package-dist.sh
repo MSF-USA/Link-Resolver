@@ -49,7 +49,7 @@ if $BUILD_WINDOWS; then
     required_targets+=("$WINDOWS_TARGET")
 fi
 for target in "${required_targets[@]}"; do
-    rustup target list --installed | grep -qx "$target" \
+    rustup target list --installed | grep -x "$target" >/dev/null \
         || { echo "Missing Rust target: run 'rustup target add $target'" >&2; exit 1; }
 done
 
@@ -74,9 +74,9 @@ MUSL_OUT="target/$MUSL_TARGET/release"
 echo "== Checking build outputs =="
 subsystem() { x86_64-w64-mingw32-objdump -p "$1" | awk '/^Subsystem/ {print $0}'; }
 if $BUILD_WINDOWS; then
-    subsystem "$WINDOWS_OUT/link-resolver.exe" | grep -q "Windows GUI" \
+    subsystem "$WINDOWS_OUT/link-resolver.exe" | grep "Windows GUI" >/dev/null \
         || { echo "link-resolver.exe is not a GUI-subsystem executable" >&2; exit 1; }
-    subsystem "$WINDOWS_OUT/link-resolver-cli.exe" | grep -q "Windows CUI" \
+    subsystem "$WINDOWS_OUT/link-resolver-cli.exe" | grep "Windows CUI" >/dev/null \
         || { echo "link-resolver-cli.exe is not a console executable" >&2; exit 1; }
 fi
 highest_glibc() { objdump -T "$1" | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1 | sed 's/GLIBC_//'; }
@@ -86,7 +86,7 @@ for binary in "$LINUX_OUT/link-resolver" "$LINUX_OUT/link-resolver-cli"; do
         echo "$binary needs glibc $needed, above the $GLIBC_BASELINE baseline" >&2; exit 1
     fi
 done
-file "$MUSL_OUT/link-resolver-cli" | grep -q "static" \
+file "$MUSL_OUT/link-resolver-cli" | grep "static" >/dev/null \
     || { echo "musl CLI is not statically linked" >&2; exit 1; }
 # A real run of the static CLI, touching no network: it must report Cargo.toml's version.
 expected_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)

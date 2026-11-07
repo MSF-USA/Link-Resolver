@@ -66,6 +66,10 @@ fn redirect_server() -> (String, thread::JoinHandle<()>) {
                     Err(error) => panic!("Accept failed: {error}"),
                 }
             };
+            // On Windows an accepted socket inherits the listener's non-blocking mode (on
+            // Linux it does not), and a non-blocking read returns WouldBlock instead of
+            // waiting for the request bytes.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();

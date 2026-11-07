@@ -83,7 +83,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.95.0
+      # The Rust version goes in the input, not the action ref: the action's tags are Rust
+      # version numbers, and Dependabot would "upgrade" a 1.95.0 ref to the newest tag,
+      # which defeats a minimum-version check (and may not even be a released toolchain).
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95"
       - uses: Swatinem/rust-cache@v2
       - name: Install Linux build libraries
         run: sudo apt-get update && sudo apt-get install -y $LINUX_PACKAGES

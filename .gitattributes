@@ -1,0 +1,4 @@
+# Shell and Python scripts keep LF endings everywhere: Bash cannot run a CRLF script, and
+# Git on Windows would otherwise convert them at checkout (including on the CI runners).
+*.sh text eol=lf
+*.py text eol=lf

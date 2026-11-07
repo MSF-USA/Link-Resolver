@@ -1,14 +1,51 @@
 """Exercise the resolver scripts against a local HTTP redirect server."""
 
 import http.server
+import os
 import pathlib
 import shutil
 import subprocess
+import sys
 import threading
 import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def find_bash():
+    """Return the path of a Bash that can run scripts, or None when there is none.
+
+    Windows ships ``C:\\Windows\\System32\\bash.exe``, which only launches WSL and
+    prints an error when no distribution is installed, so ``shutil.which('bash')`` is
+    not enough there. Git for Windows' Bash is tried first, then whatever is on PATH,
+    and a candidate counts only if it actually runs a command.
+    """
+    candidates = []
+    if sys.platform == 'win32':
+        git = shutil.which('git')
+        if git:
+            # C:\Program Files\Git\cmd\git.exe -> C:\Program Files\Git\bin\bash.exe
+            candidates.append(pathlib.Path(git).resolve().parents[1] / 'bin' / 'bash.exe')
+        for base in (os.environ.get('ProgramFiles'), os.environ.get('ProgramFiles(x86)')):
+            if base:
+                candidates.append(pathlib.Path(base) / 'Git' / 'bin' / 'bash.exe')
+    on_path = shutil.which('bash')
+    if on_path:
+        candidates.append(pathlib.Path(on_path))
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        try:
+            probe = subprocess.run(
+                [str(candidate), '-c', 'echo probe-ok'], capture_output=True,
+                text=True, timeout=20,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if probe.returncode == 0 and probe.stdout.strip() == 'probe-ok':
+            return str(candidate)
+    return None
 
 
 class RedirectHandler(http.server.BaseHTTPRequestHandler):
@@ -78,8 +115,11 @@ class ResolverTests(unittest.TestCase):
                 self.assertTrue(result.stderr)
 
     def test_bash(self):
-        """Check the Bash resolver's URL output and failure exit codes."""
-        self.check_resolver(['bash', str(ROOT / 'resolve-url.sh')])
+        """Check the Bash resolver when a working Bash exists; otherwise skip."""
+        bash = find_bash()
+        if bash is None:
+            self.skipTest('No working Bash is installed')
+        self.check_resolver([bash, str(ROOT / 'resolve-url.sh')])
 
     def test_powershell(self):
         """Check PowerShell when installed; otherwise report a skipped test."""

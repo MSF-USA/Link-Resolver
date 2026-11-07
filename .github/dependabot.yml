@@ -31,3 +31,7 @@ updates:
       github-actions:
         patterns: ["*"]
     labels: ["dependencies", "ci"]
+    ignore:
+      # Its tags are Rust versions (1.95.0, ...), not action versions. The workflows use
+      # the moving "stable" ref and pass a toolchain input where a fixed version matters.
+      - dependency-name: dtolnay/rust-toolchain

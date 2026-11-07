@@ -14,14 +14,29 @@ The binaries report the same version with Cargo's three-part form: `v1.20261106`
 as crate version `1.20261106.0`, and `v1.20261106.2` as `1.20261106.2`. That is the
 version in the HTTP user agent (`LinkResolver/1.20261106.0`) and in `--help` output, so a
 support request can be matched to a release. The version is stamped into `Cargo.toml` at
-build time by `packaging/stamp-version.py` and is never committed; the repository keeps
-`0.1.0`.
+build time by `packaging/stamp-version.py`, which edits the manifest and the crate's own
+entry in `Cargo.lock` directly (no cargo command, no network), and is never committed;
+the repository keeps `0.1.0`.
 
 ## Before you start
 
 - CI is green on the commit you want to release (Actions tab, "CI" workflow). The release
   workflow runs the full test suite again on both platforms, but a known-red commit wastes
   a run.
+- For a change to the packaging scripts or the workflow itself, run the local rehearsal
+  first. It copies the tracked files to a scratch directory, stamps a version, runs every
+  test suite and builds the Linux archives exactly as the Linux release job does, then
+  checks the packaged binaries report that version:
+
+  ```sh
+  packaging/rehearse-release.sh            # today's date
+  packaging/rehearse-release.sh v1.20261106.2
+  ```
+
+  It needs the tools listed at the top of `packaging/package-dist.sh` except MinGW. The
+  Windows half (`packaging/package-windows.ps1`) can only be rehearsed on a Windows
+  machine: run `cargo test --locked`, then the script, then `--version` on the packaged
+  executable.
 - `README.md` and `QUICKSTART.txt` describe the behaviour being shipped.
 - You have write access to the repository. The workflow uses the repository's own token;
   no secrets need to be configured.

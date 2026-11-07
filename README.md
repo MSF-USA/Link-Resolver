@@ -161,6 +161,8 @@ lists the Windows DLL imports, and writes the four archives and `SHA256SUMS` int
 `dist/`. It needs the two extra Rust targets, MinGW, Zig, `cargo-zigbuild` and `zip`.
 `--linux-only` skips the Windows half; `packaging/package-windows.ps1` builds that half
 natively on Windows with the MSVC toolchain, which is what published releases use.
+`packaging/rehearse-release.sh` replays the Linux release job locally on a clean copy of
+the tracked files, including the version stamp and the test suites.
 
 The GUI loads the desktop's graphics libraries at runtime and cannot use the
 CLI's fully static musl approach. Distribution GUI builds require glibc 2.28+;

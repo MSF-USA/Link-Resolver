@@ -179,7 +179,8 @@ GitHub Actions in `.github/workflows/` run on every push and pull request:
   binaries are kept for a week, and a build on the minimum Rust version. Windows is where
   the PowerShell script test runs.
 - **Security audit** (`audit.yml`): `cargo audit` against the RustSec database weekly,
-  whenever `Cargo.lock` changes, and on demand.
+  whenever `Cargo.lock` changes, and on demand. Advisories deliberately ignored are listed,
+  each with its reason and removal condition, in `.cargo/audit.toml`.
 - **Release** (`release.yml`): manual only, never on a push to `main`. Builds the Linux
   archives with `packaging/package-dist.sh --linux-only` and the Windows archives natively
   on a Windows runner with `packaging/package-windows.ps1`, runs every test suite on both

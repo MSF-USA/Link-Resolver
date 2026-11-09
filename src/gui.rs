@@ -1418,14 +1418,15 @@ mod tests {
     }
 
     /// Text painted over several frames while the mouse wheel scrolls the page down, so
-    /// controls below the fold in a small window count once they scroll into view.
+    /// controls below the fold in a small window count once they scroll into view. Each step
+    /// is half the window height so consecutive frames overlap and no band is skipped.
     fn run_scrolling_frames(
         context: &egui::Context,
         app: &mut RedirectApp,
         size: [f32; 2],
     ) -> String {
         let mut seen = String::new();
-        for _ in 0..12 {
+        for _ in 0..40 {
             let mut input = window(size);
             input.events.push(Event::PointerMoved(egui::pos2(
                 size[0] / 2.0,
@@ -1433,7 +1434,7 @@ mod tests {
             )));
             input.events.push(Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Point,
-                delta: egui::vec2(0.0, -400.0),
+                delta: egui::vec2(0.0, -size[1] / 2.0),
                 modifiers: Modifiers::NONE,
                 phase: egui::TouchPhase::Move,
                 source: egui::MouseWheelSource::Wheel,
@@ -1873,23 +1874,29 @@ mod tests {
             input: long_input.clone(),
             outcome: Ok(long_destination.clone()),
         });
-        for size in [[860.0, 680.0], [300.0, 240.0]] {
+        // Narrow selects the stacked layout; tall keeps the result above the fold.
+        for size in [[860.0, 680.0], [300.0, 2000.0]] {
             let mut output = context.run_ui(window(size), |ui| app.draw(ui));
             output.textures_delta.clear();
-            let painted: Vec<String> = output
-                .shapes
-                .iter()
-                .filter_map(|shape| match &shape.shape {
-                    egui::epaint::Shape::Text(text) => Some(text.galley.text().to_owned()),
-                    _ => None,
-                })
-                .collect();
+            // A galley keeps its full text when elided, so ask whether it was cut short.
+            let elided = |wanted: &str| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::epaint::Shape::Text(text) if text.galley.text() == wanted => {
+                            Some(text.galley.elided)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("{wanted} was not painted at {size:?}"))
+            };
             assert!(
-                painted.iter().any(|text| text == &long_destination),
+                !elided(&long_destination),
                 "destination was cut short at {size:?}"
             );
             assert!(
-                !painted.iter().any(|text| text == &long_input),
+                elided(&long_input),
                 "original link was expected to be truncated at {size:?}"
             );
             let update = output.platform_output.accesskit_update.unwrap();
@@ -2152,25 +2159,4 @@ mod tests {
         assert!(app.status.contains("Stopped: 1 resolved, 1 failed"));
         server.join().unwrap();
     }
-    #[test]
-    fn zz_probe() {
-        let context = egui::Context::default();
-        let mut app = RedirectApp::new(&context, None);
-        let long_input = format!("https://example.com/{}", "source/".repeat(40));
-        app.results.push(Resolution { input: long_input.clone(), outcome: Ok("https://x.org/final".into()) });
-        let mut output = context.run_ui(window([860.0, 680.0]), |ui| app.draw(ui));
-        output.textures_delta.clear();
-        for shape in &output.shapes {
-            if let egui::epaint::Shape::Text(text) = &shape.shape {
-                if text.galley.text().contains("source/") {
-                    eprintln!("PROBE len={} elided={} width={} rows={}", text.galley.text().len(), text.galley.elided, text.galley.size().x, text.galley.rows.len());
-                }
-            }
-        }
-        let mut app = app_with_mixed_results(&context);
-        let narrow = run_scrolling_frames(&context, &mut app, [300.0, 240.0]);
-        let mut lines: Vec<&str> = narrow.lines().collect(); lines.sort(); lines.dedup();
-        eprintln!("PROBE narrow: {lines:?}");
-    }
-
 }

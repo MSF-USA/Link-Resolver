@@ -13,7 +13,7 @@ use eframe::egui::{self, Color32, Id, Key, Modifiers, Response, RichText, Sense,
 use link_resolver::input::{Loaded, load_file, parse_urls};
 use link_resolver::links::is_link;
 use link_resolver::resolver::Resolver;
-use link_resolver::results::{Resolution, save_csv};
+use link_resolver::results::{ExportFormat, Resolution, save_results};
 use link_resolver::table::{PREVIEW_ROWS, Table, abbreviate};
 use link_resolver::{APP_NAME, VERSION};
 
@@ -29,12 +29,21 @@ enum WorkerEvent {
     Failed(String),
 }
 
+/// Which card shows the status line. Messages appear next to the controls that caused them:
+/// loading and resolving in the input card, finishing, copying and saving in the results card.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StatusArea {
+    Input,
+    Results,
+}
+
 /// Own the editable input, latest results and at most one background operation.
 pub(crate) struct RedirectApp {
     input: String,
     results: Vec<Resolution>,
     status: String,
     is_error: bool,
+    status_area: StatusArea,
     worker: Option<mpsc::Receiver<WorkerEvent>>,
     cancellation: Option<Arc<AtomicBool>>,
     total: usize,
@@ -47,6 +56,10 @@ pub(crate) struct RedirectApp {
     column_choice: Option<ColumnChoice>,
     /// Where keyboard focus should go on the next frame after a dialog opens or closes.
     pending_focus: Option<FocusTarget>,
+    /// Whether the Save dialog is open over the page.
+    save_dialog_open: bool,
+    /// The export chosen most recently in the Save dialog, offered first next time.
+    export_format: ExportFormat,
 }
 
 /// A table whose link column could not be chosen automatically.
@@ -67,16 +80,43 @@ enum FocusTarget {
     ColumnDialog,
     /// The Load file button, where the column chooser came from.
     LoadButton,
+    /// The first enabled choice in the Save dialog.
+    SaveDialog,
+    /// The Save button in the results header.
+    SaveButton,
 }
 
 /// Width of the Settings dialog in points before clamping to the window.
 const SETTINGS_DIALOG_WIDTH: f32 = 440.0;
+/// Width of the Save dialog in points before clamping to the window.
+const SAVE_DIALOG_WIDTH: f32 = 480.0;
 /// Width of the column chooser; wide so a few columns of links fit without scrolling.
 const COLUMN_DIALOG_WIDTH: f32 = 820.0;
 /// Longest cell text shown in the column preview grid.
 const PREVIEW_CELL_CHARS: usize = 40;
 /// Space kept between a dialog and the window edges.
 const DIALOG_MARGIN: f32 = 16.0;
+
+/// Inner padding of the page's cards, and corner radius of their borders.
+const CARD_PADDING: i8 = 16;
+const CARD_RADIUS: u8 = 4;
+/// Vertical space between the input card and the results card.
+const SECTION_GAP: f32 = 14.0;
+/// Below this width the results are stacked one block per link instead of a table, and the
+/// results header puts its buttons on their own row.
+const TABLE_MIN_WIDTH: f32 = 600.0;
+/// Fixed results table columns; the original link and destination share what is left.
+const NUMBER_COLUMN_WIDTH: f32 = 40.0;
+const STATUS_COLUMN_WIDTH: f32 = 100.0;
+/// Fits the Copy button (about 64 points) plus the cell padding.
+const ACTION_COLUMN_WIDTH: f32 = 96.0;
+/// Share of the flexible width given to the (truncated) original link.
+const ORIGINAL_COLUMN_SHARE: f32 = 0.4;
+/// Padding inside each table cell.
+const CELL_PADDING_X: i8 = 12;
+const CELL_PADDING_Y: i8 = 8;
+/// Fixed id of the status line, which moves between cards but is one live region.
+const STATUS_LINE_ID: &str = "status-line";
 
 /// What a dialog's content reported, plus whether the dialog asked to close.
 struct DialogResponse<T> {
@@ -239,6 +279,7 @@ impl RedirectApp {
             results: Vec::new(),
             status: "Paste links or load a text file to begin.".into(),
             is_error: false,
+            status_area: StatusArea::Input,
             worker: None,
             cancellation: None,
             total: 0,
@@ -247,17 +288,21 @@ impl RedirectApp {
             settings_open: false,
             column_choice: None,
             pending_focus: None,
+            save_dialog_open: false,
+            export_format: ExportFormat::default(),
         }
     }
 
     /// Whether a dialog is covering the page.
     fn dialog_open(&self) -> bool {
-        self.settings_open || self.column_choice.is_some()
+        self.settings_open || self.column_choice.is_some() || self.save_dialog_open
     }
 
-    /// Move keyboard focus to `response` if `target` is the pending hand-off.
+    /// Move keyboard focus to `response` if `target` is the pending hand-off. A disabled
+    /// control cannot hold focus (egui drops it on the next frame), so the hand-off waits
+    /// until the control is enabled, for example until a save or load worker finishes.
     fn deliver_focus(&mut self, target: FocusTarget, response: &Response) {
-        if self.pending_focus == Some(target) {
+        if self.pending_focus == Some(target) && response.enabled() {
             response.request_focus();
             self.pending_focus = None;
         }
@@ -273,9 +318,34 @@ impl RedirectApp {
         self.pending_focus = Some(FocusTarget::SettingsButton);
     }
 
+    /// Report on loading or resolving, in the input card.
     fn set_status(&mut self, message: impl Into<String>, is_error: bool) {
         self.status = message.into();
         self.is_error = is_error;
+        self.status_area = StatusArea::Input;
+    }
+
+    /// Report on finished batches, copying or saving, in the results card.
+    fn set_results_status(&mut self, message: impl Into<String>, is_error: bool) {
+        self.set_status(message, is_error);
+        self.status_area = StatusArea::Results;
+    }
+
+    fn open_save_dialog(&mut self) {
+        if !self.has_resolved_links() {
+            self.export_format = ExportFormat::Table;
+        }
+        self.save_dialog_open = true;
+        self.pending_focus = Some(FocusTarget::SaveDialog);
+    }
+
+    fn close_save_dialog(&mut self) {
+        self.save_dialog_open = false;
+        self.pending_focus = Some(FocusTarget::SaveButton);
+    }
+
+    fn has_resolved_links(&self) -> bool {
+        self.results.iter().any(|result| result.outcome.is_ok())
     }
 
     fn launch_worker(
@@ -348,7 +418,8 @@ impl RedirectApp {
         }
     }
 
-    fn save_results(&mut self, context: &egui::Context) {
+    /// Ask for a new file name on a worker thread and save the latest batch in `format`.
+    fn save_results(&mut self, context: &egui::Context, format: ExportFormat) {
         if self.worker.is_some() || self.results.is_empty() {
             return;
         }
@@ -356,19 +427,19 @@ impl RedirectApp {
         if self.launch_worker(context, move |sender, context| {
             let outcome = rfd::FileDialog::new()
                 .set_title("Save results — choose a new file name")
-                .add_filter("CSV spreadsheet", &["csv"])
-                .set_file_name("results.csv")
+                .add_filter(format.file_type(), &[format.extension()])
+                .set_file_name(format.default_file_name())
                 .save_file()
                 .map(|mut path| {
                     if path.extension().is_none() {
-                        path.set_extension("csv");
+                        path.set_extension(format.extension());
                     }
-                    save_csv(&path, &results).map(|()| path)
+                    save_results(&path, &results, format).map(|()| path)
                 })
                 .transpose();
             notify(&sender, &context, WorkerEvent::Saved(outcome));
         }) {
-            self.set_status(
+            self.set_results_status(
                 "Choose where to save the results. Existing files are kept.",
                 false,
             );
@@ -411,12 +482,11 @@ impl RedirectApp {
             WorkerEvent::Loaded(Ok(None)) => self.set_status("Load cancelled.", false),
             WorkerEvent::Loaded(Err(error)) => self.set_status(error, true),
             WorkerEvent::Saved(Ok(Some(path))) => {
-                self.set_status(format!("Saved results to {}.", path.display()), false);
+                self.set_results_status(format!("Saved results to {}.", path.display()), false);
             }
-            WorkerEvent::Saved(Ok(None)) => self.set_status("Save cancelled.", false),
-            WorkerEvent::Saved(Err(error)) | WorkerEvent::Failed(error) => {
-                self.set_status(error, true);
-            }
+            WorkerEvent::Saved(Ok(None)) => self.set_results_status("Save cancelled.", false),
+            WorkerEvent::Saved(Err(error)) => self.set_results_status(error, true),
+            WorkerEvent::Failed(error) => self.set_status(error, true),
             WorkerEvent::Finished { cancelled } => {
                 let succeeded = self
                     .results
@@ -425,7 +495,7 @@ impl RedirectApp {
                     .count();
                 let failed = self.results.len() - succeeded;
                 let prefix = if cancelled { "Stopped" } else { "Finished" };
-                self.set_status(
+                self.set_results_status(
                     format!("{prefix}: {succeeded} resolved, {failed} failed."),
                     failed > 0,
                 );
@@ -456,7 +526,9 @@ impl RedirectApp {
         let idle = self.worker.is_none();
 
         // One page-level scroll area keeps every control reachable at high zoom or in a
-        // small window; nested scroll regions would trap keyboard users.
+        // small window; nested scroll regions would trap keyboard users. A solid scroll bar
+        // takes its own space instead of floating over the cards' right border.
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
         egui::ScrollArea::vertical()
             .id_salt("page")
             .auto_shrink([false, false])
@@ -478,12 +550,12 @@ impl RedirectApp {
                     &palette,
                 ));
                 ui.add_space(10.0);
-                self.draw_input(ui, &palette, idle);
-                self.draw_controls(ui, &palette, idle);
-                ui.add_space(3.0);
-                self.draw_status(ui, &palette);
-                ui.separator();
-                self.draw_results(ui, &palette);
+                // Read once per frame: an action in the results header can move the status,
+                // and the card that already drew it must not be joined by a second copy.
+                let status_area = self.status_area;
+                self.draw_input_card(ui, &palette, idle, status_area);
+                ui.add_space(SECTION_GAP);
+                self.draw_results_card(ui, &palette, idle, status_area);
                 ui.add_space(5.0);
                 ui.label(secondary_text(
                     "Only use links you trust. Each link can take up to 30 seconds.",
@@ -494,6 +566,74 @@ impl RedirectApp {
             self.draw_settings_dialog(ui.ctx(), &palette);
         } else if self.column_choice.is_some() {
             self.draw_column_dialog(ui.ctx(), &palette);
+        } else if self.save_dialog_open {
+            self.draw_save_dialog(ui.ctx(), &palette);
+        }
+    }
+
+    /// Choose what to save: the whole table as CSV, or only the resolved links as text.
+    /// "Save…" closes the dialog and opens the system file chooser.
+    fn draw_save_dialog(&mut self, context: &egui::Context, palette: &Palette) {
+        let focus_into = self.pending_focus == Some(FocusTarget::SaveDialog);
+        let has_resolved = self.has_resolved_links();
+        let format = &mut self.export_format;
+        let dialog = show_dialog(
+            context,
+            palette,
+            "save-dialog",
+            SAVE_DIALOG_WIDTH,
+            focus_into,
+            |ui, controls| {
+                ui.label(bold_text("Save results", 20.0, palette));
+                ui.add_space(10.0);
+                for option in ExportFormat::ALL {
+                    let enabled = option == ExportFormat::Table || has_resolved;
+                    let (title, description) = export_choice_text(option, has_resolved);
+                    ui.add_enabled_ui(enabled, |ui| {
+                        let radio = ui.radio_value(format, option, title);
+                        theme::focus_ring(ui, &radio, palette.focus_ring);
+                        if enabled {
+                            controls.push(radio.id);
+                        }
+                        ui.indent(title, |ui| {
+                            ui.label(secondary_text(description, palette));
+                        });
+                    });
+                    ui.add_space(6.0);
+                }
+                ui.add_space(8.0);
+                ui.separator();
+                let mut outcome = None;
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let save = primary_button(ui, true, "Save…", palette)
+                            .on_hover_text("Choose a new file name for the selected format.");
+                        let cancel = secondary_button(ui, true, "Cancel", palette)
+                            .on_hover_text("Close without saving (Escape).");
+                        // Tab order follows reading order, so Cancel comes before Save.
+                        controls.push(cancel.id);
+                        controls.push(save.id);
+                        if save.clicked() {
+                            outcome = Some(true);
+                        } else if cancel.clicked() {
+                            outcome = Some(false);
+                        }
+                    });
+                });
+                outcome
+            },
+        );
+        if focus_into {
+            self.pending_focus = None;
+        }
+        match dialog.inner {
+            Some(true) => {
+                self.close_save_dialog();
+                self.save_results(context, self.export_format);
+            }
+            Some(false) => self.close_save_dialog(),
+            None if dialog.dismissed => self.close_save_dialog(),
+            None => {}
         }
     }
 
@@ -665,29 +805,63 @@ impl RedirectApp {
         self.pending_focus = Some(FocusTarget::ColumnDialog);
     }
 
-    fn draw_input(&mut self, ui: &mut egui::Ui, palette: &Palette, idle: bool) {
-        let label = ui.label(bold_text("URLs", theme::BODY_SIZE, palette));
-        ui.label(secondary_text(
-            "One full link per line, or load a text file.",
-            palette,
-        ));
-        ui.add_enabled_ui(idle, |ui| {
-            egui::ScrollArea::vertical()
-                .id_salt("url-input-scroll")
-                .max_height(155.0)
-                .show(ui, |ui| {
-                    ui.add(
-                        egui::TextEdit::multiline(&mut self.input)
-                            .hint_text("https://vertexaisearch.cloud.google.com/grounding-api-redirect/…\nhttps://example.com/redirect")
-                            .desired_rows(5)
-                            .desired_width(f32::INFINITY),
-                    )
-                    .labelled_by(label.id);
+    /// The input card: the link box with its own actions, status line and progress bar.
+    ///
+    /// `status_area` is where the status line belongs this frame, read before either card is
+    /// drawn so it is drawn exactly once.
+    fn draw_input_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &Palette,
+        idle: bool,
+        status_area: StatusArea,
+    ) {
+        card_frame(palette)
+            .inner_margin(CARD_PADDING)
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                let heading = ui.label(bold_text(
+                    "Links to resolve",
+                    theme::SECTION_HEADING_SIZE,
+                    palette,
+                ));
+                ui.label(secondary_text(
+                    "One full link per line, or load a text or spreadsheet file.",
+                    palette,
+                ));
+                ui.add_enabled_ui(idle, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("url-input-scroll")
+                        .max_height(155.0)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::multiline(&mut self.input)
+                                    .hint_text("https://vertexaisearch.cloud.google.com/grounding-api-redirect/…\nhttps://example.com/redirect")
+                                    .desired_rows(4)
+                                    .desired_width(f32::INFINITY),
+                            )
+                            .labelled_by(heading.id);
+                        });
                 });
-        });
+                ui.add_space(4.0);
+                self.draw_input_actions(ui, palette, idle);
+                if status_area == StatusArea::Input {
+                    ui.add_space(4.0);
+                    self.draw_status_line(ui, palette);
+                }
+                if self.cancellation.is_some() {
+                    let fraction = self.results.len() as f32 / self.total.max(1) as f32;
+                    ui.add(
+                        egui::ProgressBar::new(fraction)
+                            .desired_height(6.0)
+                            .fill(palette.accent),
+                    );
+                }
+            });
     }
 
-    fn draw_controls(&mut self, ui: &mut egui::Ui, palette: &Palette, idle: bool) {
+    /// Load file on the left; Resolve, and Stop while a batch runs, on the right.
+    fn draw_input_actions(&mut self, ui: &mut egui::Ui, palette: &Palette, idle: bool) {
         ui.horizontal(|ui| {
             let load = secondary_button(ui, idle, "Load file…", palette).on_hover_text(
                 "Choose a text file with one link per line, or a CSV or TSV spreadsheet file.",
@@ -696,44 +870,30 @@ impl RedirectApp {
             if load.clicked() {
                 self.load_file(ui.ctx());
             }
-            if primary_button(ui, idle, "Resolve", palette)
-                .on_hover_text("Find the destination of every link (Ctrl+Enter).")
-                .clicked()
-            {
-                self.start_resolution(ui.ctx());
-            }
-            if let Some(cancel) = &self.cancellation {
-                let stopping = cancel.load(Ordering::Relaxed);
-                if secondary_button(ui, !stopping, "Stop", palette)
-                    .on_hover_text("Stop after the current link finishes (up to 30 seconds).")
-                    .clicked()
-                {
-                    cancel.store(true, Ordering::Relaxed);
-                    self.set_status("Stopping after the current link finishes…", false);
-                }
-            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if secondary_button(ui, idle && !self.results.is_empty(), "Save CSV…", palette)
-                    .on_hover_text(
-                        "Save every result as a CSV spreadsheet file for Excel or LibreOffice.",
-                    )
+                if primary_button(ui, idle, "Resolve", palette)
+                    .on_hover_text("Find the destination of every link (Ctrl+Enter).")
                     .clicked()
                 {
-                    self.save_results(ui.ctx());
+                    self.start_resolution(ui.ctx());
                 }
-                let can_copy = self.results.iter().any(|result| result.outcome.is_ok());
-                if secondary_button(ui, can_copy, "Copy URLs", palette)
-                    .on_hover_text("Copy every resolved link to the clipboard.")
-                    .clicked()
-                {
-                    ui.ctx().copy_text(resolved_urls(&self.results));
-                    self.set_status("Resolved links copied. Paste them anywhere.", false);
+                if let Some(cancel) = &self.cancellation {
+                    let stopping = cancel.load(Ordering::Relaxed);
+                    if secondary_button(ui, !stopping, "Stop", palette)
+                        .on_hover_text("Stop after the current link finishes (up to 30 seconds).")
+                        .clicked()
+                    {
+                        cancel.store(true, Ordering::Relaxed);
+                        self.set_status("Stopping after the current link finishes…", false);
+                    }
                 }
             });
         });
     }
 
-    fn draw_status(&mut self, ui: &mut egui::Ui, palette: &Palette) {
+    /// The one status line, drawn in whichever card [`StatusArea`] names. Its label keeps a
+    /// fixed id so assistive technology sees one live region that changes, wherever it is.
+    fn draw_status_line(&self, ui: &mut egui::Ui, palette: &Palette) {
         ui.horizontal_wrapped(|ui| {
             if self.worker.is_some() && !self.settings.reduce_motion {
                 ui.spinner();
@@ -743,48 +903,184 @@ impl RedirectApp {
             } else {
                 palette.text
             };
-            let status = ui.label(RichText::new(&self.status).color(color));
-            // Screen readers announce changes to this line without moving focus.
-            ui.ctx().accesskit_node_builder(status.id, |node| {
-                node.set_live(egui::accesskit::Live::Polite);
-            });
-        });
-        if self.cancellation.is_some() {
-            let fraction = self.results.len() as f32 / self.total.max(1) as f32;
-            ui.add(
-                egui::ProgressBar::new(fraction)
-                    .desired_height(6.0)
-                    .fill(palette.accent),
+            ui.scope_builder(
+                egui::UiBuilder::new().scope_id(Id::unique(STATUS_LINE_ID)),
+                |ui| {
+                    let status =
+                        ui.add(egui::Label::new(RichText::new(&self.status).color(color)).wrap());
+                    // Screen readers announce changes to this line without moving focus.
+                    ui.ctx().accesskit_node_builder(status.id, |node| {
+                        node.set_live(egui::accesskit::Live::Polite);
+                    });
+                },
             );
+        });
+    }
+
+    /// The results card: a header bar with the summary and the batch actions, then the table.
+    ///
+    /// `status_area` is as for [`Self::draw_input_card`]; a status moved by the header's own
+    /// buttons appears here from the next frame.
+    fn draw_results_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &Palette,
+        idle: bool,
+        status_area: StatusArea,
+    ) {
+        card_frame(palette).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 0.0;
+            self.draw_results_header(ui, palette, idle);
+            let padded = egui::Frame::new().inner_margin(egui::Margin::symmetric(
+                CARD_PADDING,
+                CELL_PADDING_Y,
+            ));
+            if status_area == StatusArea::Results {
+                padded.show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    self.draw_status_line(ui, palette);
+                });
+                draw_row_rule(ui, palette);
+            }
+            if self.results.is_empty() {
+                padded.show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    ui.label(secondary_text(
+                        "Resolved links will appear here. You can copy them or save them to a file.",
+                        palette,
+                    ));
+                });
+                return;
+            }
+            let copied = if ui.available_width() >= TABLE_MIN_WIDTH {
+                draw_results_table(ui, &self.results, palette)
+            } else {
+                draw_results_stacked(ui, &self.results, palette)
+            };
+            if let Some(index) = copied {
+                self.set_results_status(
+                    format!("Copied the destination of link {}.", index + 1),
+                    false,
+                );
+            }
+        });
+    }
+
+    /// Title, summary, Copy resolved links and Save on a grey bar. The title takes keyboard
+    /// focus when a batch finishes and its accessible name includes the summary.
+    fn draw_results_header(&mut self, ui: &mut egui::Ui, palette: &Palette, idle: bool) {
+        let summary = self.results_summary();
+        egui::Frame::new()
+            .fill(palette.section_header)
+            .corner_radius(egui::CornerRadius {
+                nw: CARD_RADIUS,
+                ne: CARD_RADIUS,
+                sw: 0,
+                se: 0,
+            })
+            .inner_margin(egui::Margin::symmetric(CARD_PADDING, 10))
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.spacing_mut().item_spacing.y = 8.0;
+                let wide = ui.available_width() >= TABLE_MIN_WIDTH;
+                let title_row = |ui: &mut egui::Ui| {
+                    let title = ui.add(
+                        egui::Label::new(bold_text(
+                            "Results",
+                            theme::SECTION_HEADING_SIZE,
+                            palette,
+                        ))
+                        .sense(Sense::focusable_noninteractive()),
+                    );
+                    ui.ctx().accesskit_node_builder(title.id, |node| {
+                        node.set_label(format!("Results: {summary}"));
+                    });
+                    ui.add_space(8.0);
+                    ui.label(secondary_text(&summary, palette));
+                    title
+                };
+                // Labels are placed before the buttons, so the row is given the button height up
+                // front; otherwise the title sits at the top while the buttons are centred.
+                let button_height = ui.text_style_height(&egui::TextStyle::Button)
+                    + 2.0 * ui.spacing().button_padding.y;
+                let title = if wide {
+                    ui.horizontal(|ui| {
+                        ui.set_min_height(button_height);
+                        let title = title_row(ui);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            self.draw_results_actions(ui, palette, idle);
+                        });
+                        title
+                    })
+                    .inner
+                } else {
+                    let title = ui.horizontal_wrapped(title_row).inner;
+                    ui.horizontal_wrapped(|ui| {
+                        self.draw_results_actions(ui, palette, idle);
+                    });
+                    title
+                };
+                if self.focus_results {
+                    title.request_focus();
+                    self.focus_results = false;
+                }
+                theme::focus_ring(ui, &title, palette.focus_ring);
+            });
+    }
+
+    /// Copy resolved links and Save. In a right-to-left layout Save is added first so it
+    /// sits at the far right; in a wrapped row they read Copy then Save.
+    fn draw_results_actions(&mut self, ui: &mut egui::Ui, palette: &Palette, idle: bool) {
+        let right_to_left = ui.layout().main_dir() == egui::Direction::RightToLeft;
+        let can_save = idle && !self.results.is_empty();
+        let can_copy = self.has_resolved_links();
+        let save = |app: &mut Self, ui: &mut egui::Ui| {
+            let button = secondary_button(ui, can_save, "Save…", palette).on_hover_text(
+                "Save the whole table as a CSV spreadsheet, or only the resolved links as a text file.",
+            );
+            app.deliver_focus(FocusTarget::SaveButton, &button);
+            if button.clicked() {
+                app.open_save_dialog();
+            }
+        };
+        let copy = |app: &mut Self, ui: &mut egui::Ui| {
+            if secondary_button(ui, can_copy, "Copy resolved links", palette)
+                .on_hover_text("Copy every resolved link to the clipboard, one per line.")
+                .clicked()
+            {
+                ui.ctx().copy_text(resolved_urls(&app.results));
+                app.set_results_status("Resolved links copied. Paste them anywhere.", false);
+            }
+        };
+        if right_to_left {
+            save(self, ui);
+            copy(self, ui);
+        } else {
+            copy(self, ui);
+            save(self, ui);
         }
     }
 
-    fn draw_results(&mut self, ui: &mut egui::Ui, palette: &Palette) {
-        let summary = ui.add(
-            egui::Label::new(bold_text(
-                "Results from the latest batch",
-                theme::BODY_SIZE,
-                palette,
-            ))
-            .sense(Sense::focusable_noninteractive()),
-        );
-        ui.ctx().memory_mut(|memory| {
-            if self.focus_results {
-                memory.request_focus(summary.id);
-            }
-        });
-        self.focus_results = false;
-        theme::focus_ring(ui, &summary, palette.focus_ring);
+    /// "3 links · 2 resolved · 1 failed", or progress while a batch runs.
+    fn results_summary(&self) -> String {
+        if self.cancellation.is_some() {
+            return format!("{} of {} done", self.results.len(), self.total);
+        }
         if self.results.is_empty() {
-            ui.add_space(20.0);
-            ui.label(secondary_text(
-                "Resolved links will appear here. You can copy them or save a CSV file.",
-                palette,
-            ));
+            return "No results yet".into();
         }
-        for (index, result) in self.results.iter().enumerate() {
-            draw_result(ui, index, result, palette);
-        }
+        let resolved = self
+            .results
+            .iter()
+            .filter(|result| result.outcome.is_ok())
+            .count();
+        let total = self.results.len();
+        format!(
+            "{total} link{} · {resolved} resolved · {} failed",
+            if total == 1 { "" } else { "s" },
+            total - resolved
+        )
     }
 }
 
@@ -910,52 +1206,209 @@ fn primary_button(ui: &mut egui::Ui, enabled: bool, label: &str, palette: &Palet
     response
 }
 
-fn draw_result(ui: &mut egui::Ui, index: usize, result: &Resolution, palette: &Palette) {
-    let number = index + 1;
+/// Title and description of one choice in the Save dialog.
+fn export_choice_text(format: ExportFormat, has_resolved: bool) -> (&'static str, &'static str) {
+    match format {
+        ExportFormat::Table => (
+            "Whole table (CSV)",
+            "Every link with its destination, status and any error. Opens in Excel or LibreOffice.",
+        ),
+        ExportFormat::ResolvedLinks if has_resolved => (
+            "Resolved links only (text file)",
+            "One destination per line, ready to paste or load back in. Failed links are left out.",
+        ),
+        ExportFormat::ResolvedLinks => (
+            "Resolved links only (text file)",
+            "Not available: no link in this batch was resolved.",
+        ),
+    }
+}
+
+/// A bordered white (or dark surface) card holding one section of the page.
+fn card_frame(palette: &Palette) -> egui::Frame {
     egui::Frame::new()
         .fill(palette.surface)
         .stroke(Stroke::new(1.0, palette.border))
-        .corner_radius(4)
-        .inner_margin(12)
-        .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.horizontal(|ui| {
-                let (label, color) = if result.outcome.is_ok() {
-                    ("Resolved", palette.text)
-                } else {
-                    ("Failed", palette.problem)
-                };
-                ui.label(
-                    RichText::new(format!("{number}. {label}"))
-                        .font(theme::bold(theme::BODY_SIZE))
-                        .color(color),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if let Ok(url) = &result.outcome
-                        && secondary_button(ui, true, "Copy", palette)
-                            .on_hover_text(format!("Copy the destination of link {number}."))
-                            .clicked()
-                    {
-                        ui.ctx().copy_text(url.clone());
-                    }
-                });
-            });
-            // The source link wraps rather than truncating, so nothing lives only in a tooltip.
-            ui.add(
-                egui::Label::new(secondary_text(&result.input, palette))
-                    .wrap()
-                    .selectable(true),
+        .corner_radius(CARD_RADIUS)
+}
+
+/// A full-width hairline between table rows, in the decorative border colour.
+fn draw_row_rule(ui: &mut egui::Ui, palette: &Palette) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), Sense::hover());
+    ui.painter().hline(
+        rect.x_range(),
+        rect.center().y,
+        Stroke::new(1.0, palette.border),
+    );
+}
+
+/// Widths of the results table columns for a given table width. Number, status and the Copy
+/// button are fixed; the original link and destination share the rest, the destination
+/// getting the larger part because it is never truncated.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ColumnWidths([f32; 5]);
+
+impl ColumnWidths {
+    fn for_width(width: f32) -> Self {
+        let fixed = NUMBER_COLUMN_WIDTH + STATUS_COLUMN_WIDTH + ACTION_COLUMN_WIDTH;
+        let flexible = (width - fixed).max(0.0);
+        let original = (flexible * ORIGINAL_COLUMN_SHARE).floor();
+        Self([
+            NUMBER_COLUMN_WIDTH,
+            STATUS_COLUMN_WIDTH,
+            original,
+            flexible - original,
+            ACTION_COLUMN_WIDTH,
+        ])
+    }
+}
+
+/// One table row: each cell is a fixed-width, top-aligned, padded column. `cell` draws the
+/// content of column `index`.
+fn draw_table_row(
+    ui: &mut egui::Ui,
+    widths: ColumnWidths,
+    mut cell: impl FnMut(&mut egui::Ui, usize),
+) {
+    let spacing = ui.spacing().item_spacing;
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        for (index, width) in widths.0.into_iter().enumerate() {
+            ui.allocate_ui_with_layout(
+                egui::vec2(width, 0.0),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_width(width);
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin::symmetric(CELL_PADDING_X, CELL_PADDING_Y))
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing = spacing;
+                            ui.set_width(ui.available_width());
+                            cell(ui, index);
+                        });
+                },
             );
-            match &result.outcome {
-                Ok(url) => {
-                    ui.add(egui::Label::new(url).wrap().selectable(true));
-                }
-                Err(error) => {
-                    ui.add(egui::Label::new(error.as_str()).wrap().selectable(true));
+        }
+    });
+}
+
+/// The results as a table. Returns the index of a row whose Copy button was clicked.
+fn draw_results_table(
+    ui: &mut egui::Ui,
+    results: &[Resolution],
+    palette: &Palette,
+) -> Option<usize> {
+    let widths = ColumnWidths::for_width(ui.available_width());
+    let headings = ["#", "Status", "Original link", "Destination", ""];
+    draw_table_row(ui, widths, |ui, column| {
+        ui.label(bold_text(headings[column], theme::BODY_SIZE, palette));
+    });
+    draw_row_rule(ui, palette);
+    let mut copied = None;
+    for (index, result) in results.iter().enumerate() {
+        draw_table_row(ui, widths, |ui, column| match column {
+            0 => {
+                ui.label(format!("{}", index + 1));
+            }
+            1 => {
+                ui.label(status_text(result, palette));
+            }
+            2 => original_link(ui, result, palette),
+            3 => destination(ui, result),
+            _ => {
+                // A button label never wraps; the column is sized for it.
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                if copy_button(ui, index, result, palette) {
+                    copied = Some(index);
                 }
             }
         });
-    ui.add_space(4.0);
+        draw_row_rule(ui, palette);
+    }
+    copied
+}
+
+/// The results as labelled blocks, one per link, for windows too narrow for the table.
+/// Returns the index of a row whose Copy button was clicked.
+fn draw_results_stacked(
+    ui: &mut egui::Ui,
+    results: &[Resolution],
+    palette: &Palette,
+) -> Option<usize> {
+    let mut copied = None;
+    for (index, result) in results.iter().enumerate() {
+        egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(CARD_PADDING, CELL_PADDING_Y + 4))
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!("{}.", index + 1));
+                    ui.label(status_text(result, palette));
+                    if copy_button(ui, index, result, palette) {
+                        copied = Some(index);
+                    }
+                });
+                ui.label(secondary_text("Original link", palette));
+                original_link(ui, result, palette);
+                let label = if result.outcome.is_ok() {
+                    "Destination"
+                } else {
+                    "Why it failed"
+                };
+                ui.label(secondary_text(label, palette));
+                destination(ui, result);
+            });
+        draw_row_rule(ui, palette);
+    }
+    copied
+}
+
+/// "Resolved" in body text, or "Failed" in the problem colour, both bold.
+fn status_text(result: &Resolution, palette: &Palette) -> RichText {
+    let (label, color) = if result.outcome.is_ok() {
+        ("Resolved", palette.text)
+    } else {
+        ("Failed", palette.problem)
+    };
+    RichText::new(label)
+        .font(theme::bold(theme::BODY_SIZE))
+        .color(color)
+}
+
+/// The original link on one line, cut short with an ellipsis when it does not fit. The full
+/// text is the accessible name and the hover text; it is also in the text box and the CSV.
+fn original_link(ui: &mut egui::Ui, result: &Resolution, palette: &Palette) {
+    let response = ui.add(
+        egui::Label::new(RichText::new(&result.input).color(palette.text_secondary)).truncate(),
+    );
+    let full_text = result.input.clone();
+    ui.ctx()
+        .accesskit_node_builder(response.id, |node| node.set_label(full_text));
+}
+
+/// The destination, always in full and wrapping; or why the link failed, in body text so
+/// red stays a short label.
+fn destination(ui: &mut egui::Ui, result: &Resolution) {
+    let text = match &result.outcome {
+        Ok(url) | Err(url) => url.as_str(),
+    };
+    ui.add(egui::Label::new(text).wrap().selectable(true));
+}
+
+/// A Copy button for a resolved row; nothing for a failed one. Returns whether it was clicked.
+fn copy_button(ui: &mut egui::Ui, index: usize, result: &Resolution, palette: &Palette) -> bool {
+    let Ok(url) = &result.outcome else {
+        return false;
+    };
+    let number = index + 1;
+    let clicked = secondary_button(ui, true, "Copy", palette)
+        .on_hover_text(format!("Copy the destination of link {number}."))
+        .clicked();
+    if clicked {
+        ui.ctx().copy_text(url.clone());
+    }
+    clicked
 }
 
 #[cfg(test)]
@@ -998,14 +1451,15 @@ mod tests {
     }
 
     /// Text painted over several frames while the mouse wheel scrolls the page down, so
-    /// controls below the fold in a small window count once they scroll into view.
+    /// controls below the fold in a small window count once they scroll into view. Each step
+    /// is half the window height so consecutive frames overlap and no band is skipped.
     fn run_scrolling_frames(
         context: &egui::Context,
         app: &mut RedirectApp,
         size: [f32; 2],
     ) -> String {
         let mut seen = String::new();
-        for _ in 0..12 {
+        for _ in 0..40 {
             let mut input = window(size);
             input.events.push(Event::PointerMoved(egui::pos2(
                 size[0] / 2.0,
@@ -1013,7 +1467,7 @@ mod tests {
             )));
             input.events.push(Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Point,
-                delta: egui::vec2(0.0, -400.0),
+                delta: egui::vec2(0.0, -size[1] / 2.0),
                 modifiers: Modifiers::NONE,
                 phase: egui::TouchPhase::Move,
                 source: egui::MouseWheelSource::Wheel,
@@ -1243,12 +1697,15 @@ mod tests {
                 let text = run_scrolling_frames(&context, &mut app, size);
                 for label in [
                     APP_NAME,
+                    "Links to resolve",
                     "Load file…",
                     "Resolve",
-                    "Save CSV…",
-                    "Copy URLs",
+                    "Results",
+                    "2 links · 1 resolved · 1 failed",
+                    "Save…",
+                    "Copy resolved links",
                     "https://example.com/final",
-                    "2. Failed",
+                    "Failed",
                     "Enter a full link.",
                 ] {
                     assert!(
@@ -1276,7 +1733,7 @@ mod tests {
             assert!(open.contains(label), "missing {label}");
         }
         // The page stays in place underneath rather than being pushed down.
-        assert!(open.contains("Resolve") && open.contains("Results from the latest batch"));
+        assert!(open.contains("Links to resolve") && open.contains("No results yet"));
         app.settings.theme = ThemeChoice::Dark;
         app.settings.zoom = 1.5;
         app.settings.apply(&context);
@@ -1346,20 +1803,374 @@ mod tests {
         );
     }
 
-    #[test]
-    fn source_links_wrap_instead_of_truncating() {
-        let context = egui::Context::default();
-        let mut app = RedirectApp::new(&context, None);
-        let long_input = format!("https://example.com/{}", "segment/".repeat(40));
+    /// Painted text with the top-left corner of each piece, for checking where things sit.
+    fn painted_positions(
+        context: &egui::Context,
+        app: &mut RedirectApp,
+        size: [f32; 2],
+    ) -> Vec<(String, egui::Pos2)> {
+        let mut output = context.run_ui(window(size), |ui| {
+            egui::Frame::central_panel(ui.style())
+                .inner_margin(egui::Margin::same(20))
+                .show(ui, |ui| app.draw(ui));
+        });
+        output.textures_delta.clear();
+        output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) => Some((text.galley.text().to_owned(), text.pos)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn position_of(painted: &[(String, egui::Pos2)], text: &str) -> egui::Pos2 {
+        painted
+            .iter()
+            .find(|(painted_text, _)| painted_text == text)
+            .unwrap_or_else(|| panic!("{text} was not painted"))
+            .1
+    }
+
+    fn app_with_mixed_results(context: &egui::Context) -> RedirectApp {
+        let mut app = RedirectApp::new(context, None);
+        app.input = "https://example.com/start\nnonsense".into();
         app.results.push(Resolution {
-            input: long_input.clone(),
+            input: "https://example.com/start".into(),
             outcome: Ok("https://example.com/final".into()),
         });
-        let text = run_frame(&context, &mut app, window([600.0, 480.0]));
-        assert!(
-            text.contains(&long_input),
-            "source link was cut short: {text}"
+        app.results.push(Resolution {
+            input: "nonsense".into(),
+            outcome: Err("Enter a full link.".into()),
+        });
+        app
+    }
+
+    /// Run one frame of the page at 860 x 680 with `events`, textures discarded.
+    fn page_frame(
+        context: &egui::Context,
+        app: &mut RedirectApp,
+        events: Vec<Event>,
+    ) -> egui::FullOutput {
+        let mut input = window([860.0, 680.0]);
+        input.events = events;
+        let mut output = context.run_ui(input, |ui| {
+            egui::Frame::central_panel(ui.style())
+                .inner_margin(egui::Margin::same(20))
+                .show(ui, |ui| app.draw(ui));
+        });
+        output.textures_delta.clear();
+        output
+    }
+
+    fn painted_texts(output: &egui::FullOutput) -> Vec<String> {
+        output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn pointer_button(position: egui::Pos2, pressed: bool) -> Event {
+        Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn copying_from_the_header_moves_the_status_without_drawing_it_twice() {
+        let context = egui::Context::default();
+        let mut app = app_with_mixed_results(&context);
+        let loaded = "Loaded 2 links. Click Resolve to start.";
+        let copied = "Resolved links copied. Paste them anywhere.";
+        app.set_status(loaded, false);
+        let painted = painted_positions(&context, &mut app, [860.0, 680.0]);
+        // Text is painted inside the button's padding, so a few points in is on the button.
+        let copy_all = position_of(&painted, "Copy resolved links") + egui::vec2(4.0, 4.0);
+        page_frame(&context, &mut app, vec![Event::PointerMoved(copy_all)]);
+        page_frame(&context, &mut app, vec![pointer_button(copy_all, true)]);
+        let click_frame = page_frame(&context, &mut app, vec![pointer_button(copy_all, false)]);
+        assert_eq!(
+            app.status, copied,
+            "the click did not reach Copy resolved links"
         );
+        // The status line has one fixed id, so drawing it in both cards in one frame is an
+        // id clash (and one AccessKit node for two widgets). Each card paints it under its
+        // own message, so two status messages in one frame is the visible sign.
+        let status_lines = painted_texts(&click_frame)
+            .into_iter()
+            .filter(|text| text == loaded || text == copied)
+            .count();
+        assert_eq!(
+            status_lines, 1,
+            "the status line was drawn in both cards in one frame"
+        );
+        let painted = painted_positions(&context, &mut app, [860.0, 680.0]);
+        assert!(
+            position_of(&painted, copied).y > position_of(&painted, "Results").y,
+            "the copy message did not move to the results card"
+        );
+    }
+
+    #[test]
+    fn focus_returns_to_save_once_the_file_chooser_finishes() {
+        let context = egui::Context::default();
+        context.enable_accesskit();
+        let mut app = app_with_mixed_results(&context);
+        page_frame(&context, &mut app, Vec::new());
+        // Confirming the dialog queues focus for Save while the file chooser worker runs,
+        // which disables Save until it finishes.
+        app.close_save_dialog();
+        let (sender, receiver) = mpsc::channel();
+        app.worker = Some(receiver);
+        for _ in 0..3 {
+            page_frame(&context, &mut app, Vec::new());
+        }
+        assert_eq!(
+            app.pending_focus,
+            Some(FocusTarget::SaveButton),
+            "the hand-off was spent on a disabled button"
+        );
+        drop(sender);
+        app.apply_event(WorkerEvent::Saved(Ok(None)));
+        // One frame delivers the hand-off; focus is in the tree from the next one.
+        page_frame(&context, &mut app, Vec::new());
+        assert_eq!(app.pending_focus, None, "the hand-off was not delivered");
+        let update = page_frame(&context, &mut app, Vec::new())
+            .platform_output
+            .accesskit_update
+            .expect("AccessKit tree was not produced");
+        let focused_label = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == update.focus)
+            .and_then(|(_, node)| node.label().map(str::to_owned));
+        assert_eq!(
+            focused_label.as_deref(),
+            Some("Save…"),
+            "focus is not on Save"
+        );
+    }
+
+    #[test]
+    fn results_actions_live_in_the_results_header_not_beside_resolve() {
+        let context = egui::Context::default();
+        let mut app = app_with_mixed_results(&context);
+        let painted = painted_positions(&context, &mut app, [860.0, 680.0]);
+        let resolve = position_of(&painted, "Resolve");
+        let load = position_of(&painted, "Load file…");
+        let title = position_of(&painted, "Results");
+        let copy_all = position_of(&painted, "Copy resolved links");
+        let save = position_of(&painted, "Save…");
+        let first_destination = position_of(&painted, "https://example.com/final");
+        // Load file and Resolve share the input card's row; the batch actions do not.
+        assert!((load.y - resolve.y).abs() < 2.0);
+        for action in [copy_all, save] {
+            assert!(
+                action.y > resolve.y + 20.0,
+                "a results action is on the input row"
+            );
+            assert!(
+                (action.y - title.y).abs() < 12.0,
+                "a results action is not on the header bar"
+            );
+            assert!(
+                action.y < first_destination.y,
+                "a results action is below the table"
+            );
+        }
+        assert!(copy_all.x < save.x, "Copy should read before Save");
+    }
+
+    #[test]
+    fn wide_windows_show_a_table_and_narrow_ones_stack_each_link() {
+        let context = egui::Context::default();
+        let mut app = app_with_mixed_results(&context);
+        let wide = run_frame(&context, &mut app, window([860.0, 680.0]));
+        for heading in ["#", "Status", "Original link", "Destination"] {
+            assert!(
+                wide.lines().any(|line| line == heading),
+                "missing {heading}"
+            );
+        }
+        assert!(!wide.contains("Why it failed"));
+        let narrow = run_scrolling_frames(&context, &mut app, [300.0, 240.0]);
+        assert!(!narrow.lines().any(|line| line == "Status"));
+        for label in ["1.", "Original link", "Destination", "Why it failed"] {
+            assert!(narrow.contains(label), "missing {label} when stacked");
+        }
+    }
+
+    #[test]
+    fn destinations_wrap_in_full_and_original_links_keep_their_full_accessible_name() {
+        let context = egui::Context::default();
+        context.enable_accesskit();
+        let mut app = RedirectApp::new(&context, None);
+        let long_input = format!("https://example.com/{}", "source/".repeat(40));
+        let long_destination = format!("https://example.org/{}", "final/".repeat(40));
+        app.results.push(Resolution {
+            input: long_input.clone(),
+            outcome: Ok(long_destination.clone()),
+        });
+        // Narrow selects the stacked layout; tall keeps the result above the fold.
+        for size in [[860.0, 680.0], [300.0, 2000.0]] {
+            let mut output = context.run_ui(window(size), |ui| app.draw(ui));
+            output.textures_delta.clear();
+            // A galley keeps its full text when elided, so ask whether it was cut short.
+            let elided = |wanted: &str| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::epaint::Shape::Text(text) if text.galley.text() == wanted => {
+                            Some(text.galley.elided)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("{wanted} was not painted at {size:?}"))
+            };
+            assert!(
+                !elided(&long_destination),
+                "destination was cut short at {size:?}"
+            );
+            assert!(
+                elided(&long_input),
+                "original link was expected to be truncated at {size:?}"
+            );
+            let update = output.platform_output.accesskit_update.unwrap();
+            assert!(
+                update
+                    .nodes
+                    .iter()
+                    .any(|(_, node)| node.label() == Some(long_input.as_str())),
+                "truncated original link lost its full accessible name at {size:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn status_shows_beside_what_caused_it_and_stays_one_live_region() {
+        let context = egui::Context::default();
+        context.enable_accesskit();
+        let mut app = app_with_mixed_results(&context);
+        let live_node = |context: &egui::Context, app: &mut RedirectApp| {
+            let mut output = context.run_ui(window([860.0, 680.0]), |ui| app.draw(ui));
+            output.textures_delta.clear();
+            output
+                .platform_output
+                .accesskit_update
+                .unwrap()
+                .nodes
+                .into_iter()
+                .filter(|(_, node)| node.live() == Some(egui::accesskit::Live::Polite))
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>()
+        };
+
+        app.set_status("Loaded 2 links. Click Resolve to start.", false);
+        let painted = painted_positions(&context, &mut app, [860.0, 680.0]);
+        assert!(
+            position_of(&painted, "Loaded 2 links. Click Resolve to start.").y
+                < position_of(&painted, "Results").y,
+            "input status is not in the input card"
+        );
+        let input_region = live_node(&context, &mut app);
+
+        app.apply_event(WorkerEvent::Finished { cancelled: false });
+        let painted = painted_positions(&context, &mut app, [860.0, 680.0]);
+        assert!(
+            position_of(&painted, "Finished: 1 resolved, 1 failed.").y
+                > position_of(&painted, "Results").y,
+            "batch status is not in the results card"
+        );
+        let results_region = live_node(&context, &mut app);
+        assert_eq!(input_region.len(), 1);
+        assert_eq!(
+            input_region, results_region,
+            "the status line became a new live region when it moved"
+        );
+    }
+
+    #[test]
+    fn save_dialog_offers_both_exports_and_returns_focus_on_escape() {
+        let context = egui::Context::default();
+        let mut app = app_with_mixed_results(&context);
+        run_frame(&context, &mut app, window([860.0, 680.0]));
+        app.open_save_dialog();
+        run_frame(&context, &mut app, window([860.0, 680.0]));
+        let open = run_frame(&context, &mut app, window([860.0, 680.0]));
+        for label in [
+            "Save results",
+            "Whole table (CSV)",
+            "Resolved links only (text file)",
+            "Failed links are left out.",
+            "Cancel",
+        ] {
+            assert!(open.contains(label), "missing {label}");
+        }
+        assert!(context.memory(|memory| memory.focused()).is_some());
+        app.export_format = ExportFormat::ResolvedLinks;
+        let mut input = window([860.0, 680.0]);
+        input.events.push(Event::Key {
+            key: Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        run_frame(&context, &mut app, input);
+        assert!(!app.save_dialog_open, "Escape did not close the dialog");
+        assert!(app.worker.is_none(), "closing started a save");
+        assert_eq!(
+            app.export_format,
+            ExportFormat::ResolvedLinks,
+            "choice forgotten"
+        );
+        run_frame(&context, &mut app, window([860.0, 680.0]));
+        assert_eq!(app.pending_focus, None, "focus was not handed back to Save");
+    }
+
+    #[test]
+    fn links_only_export_is_unavailable_when_nothing_resolved() {
+        let context = egui::Context::default();
+        let mut app = RedirectApp::new(&context, None);
+        app.results.push(Resolution {
+            input: "nonsense".into(),
+            outcome: Err("Enter a full link.".into()),
+        });
+        app.export_format = ExportFormat::ResolvedLinks;
+        app.open_save_dialog();
+        assert_eq!(app.export_format, ExportFormat::Table);
+        run_frame(&context, &mut app, window([860.0, 680.0]));
+        let open = run_frame(&context, &mut app, window([860.0, 680.0]));
+        assert!(open.contains("Not available: no link in this batch was resolved."));
+    }
+
+    #[test]
+    fn column_widths_fill_the_table_and_favour_the_destination() {
+        for width in [TABLE_MIN_WIDTH, 820.0, 1600.0] {
+            let ColumnWidths(columns) = ColumnWidths::for_width(width);
+            let total: f32 = columns.iter().sum();
+            assert!(
+                (total - width).abs() < 0.5,
+                "{columns:?} do not add up to {width}"
+            );
+            assert!(
+                columns[3] > columns[2],
+                "destination narrower than original"
+            );
+            assert!(
+                columns[2] > 100.0,
+                "original link column too narrow at {width}"
+            );
+        }
     }
 
     #[test]

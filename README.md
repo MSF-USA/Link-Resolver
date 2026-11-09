@@ -53,9 +53,17 @@ The window offers:
    the chosen column that do not hold a link are skipped and listed by row number.
 3. **Resolve** (or Ctrl+Enter) — start a batch with live progress and per-link results.
 4. **Stop** — stop after the current URL finishes (up to thirty seconds).
-5. **Copy** / **Copy URLs** — copy one destination or all successful destinations.
-6. **Save CSV…** — select a new file name in a writable folder.
-7. **Settings** — theme (follow system, light, dark), text size, reduce motion
+5. **Results** — a table below the input with one row per link: number, status,
+   the original link (shortened when long; the full text is in the text box and
+   the CSV) and the destination, always shown in full. A failed row explains why
+   in place of a destination. In a narrow window or at large text sizes each
+   link is shown as a labelled block instead.
+6. **Copy** / **Copy resolved links** — copy one destination, or every
+   successful destination one per line, from the bar at the top of the results.
+7. **Save…** — choose the whole table as a CSV spreadsheet (link, destination,
+   status, error) or only the resolved links as a text file (one per line,
+   ready to load back in), then pick a new file name in a writable folder.
+8. **Settings** — theme (follow system, light, dark), text size, reduce motion
    (shown open in [`docs/gui-settings.png`](docs/gui-settings.png)).
 
 Networking, file loading, dialogs and export run on background threads; the
@@ -179,7 +187,8 @@ GitHub Actions in `.github/workflows/` run on every push and pull request:
   binaries are kept for a week, and a build on the minimum Rust version. Windows is where
   the PowerShell script test runs.
 - **Security audit** (`audit.yml`): `cargo audit` against the RustSec database weekly,
-  whenever `Cargo.lock` changes, and on demand.
+  whenever `Cargo.lock` changes, and on demand. Advisories deliberately ignored are listed,
+  each with its reason and removal condition, in `.cargo/audit.toml`.
 - **Release** (`release.yml`): manual only, never on a push to `main`. Builds the Linux
   archives with `packaging/package-dist.sh --linux-only` and the Windows archives natively
   on a Windows runner with `packaging/package-windows.ps1`, runs every test suite on both

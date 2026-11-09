@@ -1,0 +1,19 @@
+# cargo-audit configuration, read by `cargo audit` locally and by .github/workflows/audit.yml.
+#
+# Every ignored advisory must say why, where it enters the dependency graph, and what event
+# lets us remove it. Ignoring an ID only silences that one advisory: any new advisory against
+# the same crates, including a real vulnerability, is still reported.
+
+[advisories]
+ignore = [
+    # zvariant, zbus_names and zvariant_derive are "unmaintained" only because zbus 6 absorbed
+    # them; there is no vulnerability. They reach us solely through the Linux screen reader
+    # bridge: eframe -> egui-winit -> accesskit_winit -> accesskit_unix -> atspi / zbus 5.
+    # Windows and CLI-only builds do not contain them. AccessKit ignores the same three IDs
+    # (https://github.com/AccessKit/accesskit/pull/834) until it can move to zbus 6.
+    # Remove these once an eframe release depends on an accesskit_unix that uses zbus 6
+    # (check with `cargo tree -i zvariant`).
+    "RUSTSEC-2026-0370", # zvariant
+    "RUSTSEC-2026-0371", # zbus_names
+    "RUSTSEC-2026-0372", # zvariant_derive
+]

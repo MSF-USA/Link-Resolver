@@ -25,9 +25,13 @@ automatically. If several columns hold links, or none does, a dialog shows
 the first rows of the file as a grid: click a column to select it, and untick
 "First row is a header" if the file has none. Rows without a link are skipped
 and their row numbers are listed in the message under the buttons.
-Click "Resolve" and watch the results appear below.
-Click "Copy" for one destination, or "Copy URLs" for all resolved destinations.
-Click "Save CSV" to save all results, including any errors.
+Click "Resolve" and watch the results table fill in below. Each row shows the
+original link and its destination; a failed row says why instead.
+The bar above the table holds the actions for the results:
+"Copy resolved links" copies every destination, one per line, and
+"Save" lets you choose the whole table (a CSV file, including any errors) or
+only the resolved links (a text file, one per line).
+Click "Copy" on a row to copy just that destination.
 "Stop" stops after the current link finishes (up to 30 seconds).
 Close the window when finished. Save or copy first if you want to keep results.
 
@@ -35,10 +39,11 @@ Links can be written as https://example.com/page, www.example.com or
 example.com/page. Text files use one link per line; the included urls.txt
 and links.csv are examples.
 Blank lines and lines starting with # are ignored.
-Results are shown on screen. Save CSV before exiting if you want to keep them.
+Results are shown on screen. Save them before exiting if you want to keep them.
 Save into a folder you can write to. Existing files are never overwritten.
 CSV files can be opened in Excel, LibreOffice or a text editor.
 CSV includes the input link, destination link, status and any error.
+The resolved links text file holds only successful destinations.
 
 Each link can take up to 30 seconds. Failed links do not stop the batch.
 The window remains responsive while working.

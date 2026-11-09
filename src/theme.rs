@@ -40,6 +40,8 @@ const DARK_HIGHLIGHT: Color32 = Color32::from_rgb(0x4A, 0x1F, 0x1F);
 
 /// Type scale in points. Nothing user-facing is set below [`SECONDARY_SIZE`].
 pub(crate) const HEADING_SIZE: f32 = 26.0;
+/// Titles of the cards on the main page ("Links to resolve", "Results").
+pub(crate) const SECTION_HEADING_SIZE: f32 = 18.0;
 pub(crate) const BODY_SIZE: f32 = 15.0;
 pub(crate) const SECONDARY_SIZE: f32 = 13.0;
 
@@ -90,6 +92,9 @@ pub(crate) struct Palette {
     /// Background of a selected column in a table preview. Always paired with another cue
     /// (a radio button), never the only sign of selection.
     pub highlight: Color32,
+    /// The header bar of a section card, such as the results table's title and actions.
+    /// Carries body and secondary text and bordered buttons; never problem text.
+    pub section_header: Color32,
 }
 
 impl Palette {
@@ -110,6 +115,7 @@ impl Palette {
         pressed_fill: MEDIUM_GRAY,
         track: LIGHT_GRAY_2,
         highlight: LIGHT_HIGHLIGHT,
+        section_header: LIGHT_GRAY_2,
     };
 
     pub(crate) const DARK: Self = Self {
@@ -129,6 +135,7 @@ impl Palette {
         pressed_fill: DARK_GRAY,
         track: DARK_SURFACE,
         highlight: DARK_HIGHLIGHT,
+        section_header: DARK_HOVER,
     };
 
     /// The palette for the theme egui is currently rendering.
@@ -342,6 +349,16 @@ mod tests {
                     palette.background,
                 ),
                 ("problem text on surface", palette.problem, palette.surface),
+                (
+                    "body text on section header",
+                    palette.text,
+                    palette.section_header,
+                ),
+                (
+                    "secondary text on section header",
+                    palette.text_secondary,
+                    palette.section_header,
+                ),
                 ("button text on accent", palette.on_accent, palette.accent),
                 (
                     "button text on pressed accent",
@@ -374,6 +391,16 @@ mod tests {
                     palette.background,
                 ),
                 ("focus ring on surface", palette.focus_ring, palette.surface),
+                (
+                    "control border on section header",
+                    palette.control_border,
+                    palette.section_header,
+                ),
+                (
+                    "focus ring on section header",
+                    palette.focus_ring,
+                    palette.section_header,
+                ),
                 (
                     "focus ring on accent",
                     palette.focus_ring_on_accent,

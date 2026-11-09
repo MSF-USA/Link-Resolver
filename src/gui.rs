@@ -1663,12 +1663,15 @@ mod tests {
                 let text = run_scrolling_frames(&context, &mut app, size);
                 for label in [
                     APP_NAME,
+                    "Links to resolve",
                     "Load file…",
                     "Resolve",
-                    "Save CSV…",
-                    "Copy URLs",
+                    "Results",
+                    "2 links · 1 resolved · 1 failed",
+                    "Save…",
+                    "Copy resolved links",
                     "https://example.com/final",
-                    "2. Failed",
+                    "Failed",
                     "Enter a full link.",
                 ] {
                     assert!(
@@ -1696,7 +1699,7 @@ mod tests {
             assert!(open.contains(label), "missing {label}");
         }
         // The page stays in place underneath rather than being pushed down.
-        assert!(open.contains("Resolve") && open.contains("Results from the latest batch"));
+        assert!(open.contains("Links to resolve") && open.contains("No results yet"));
         app.settings.theme = ThemeChoice::Dark;
         app.settings.zoom = 1.5;
         app.settings.apply(&context);
@@ -1766,20 +1769,256 @@ mod tests {
         );
     }
 
-    #[test]
-    fn source_links_wrap_instead_of_truncating() {
-        let context = egui::Context::default();
-        let mut app = RedirectApp::new(&context, None);
-        let long_input = format!("https://example.com/{}", "segment/".repeat(40));
+    /// Painted text with the top-left corner of each piece, for checking where things sit.
+    fn painted_positions(
+        context: &egui::Context,
+        app: &mut RedirectApp,
+        size: [f32; 2],
+    ) -> Vec<(String, egui::Pos2)> {
+        let mut output = context.run_ui(window(size), |ui| {
+            egui::Frame::central_panel(ui.style())
+                .inner_margin(egui::Margin::same(20))
+                .show(ui, |ui| app.draw(ui));
+        });
+        output.textures_delta.clear();
+        output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) => Some((text.galley.text().to_owned(), text.pos)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn position_of(painted: &[(String, egui::Pos2)], text: &str) -> egui::Pos2 {
+        painted
+            .iter()
+            .find(|(painted_text, _)| painted_text == text)
+            .unwrap_or_else(|| panic!("{text} was not painted"))
+            .1
+    }
+
+    fn app_with_mixed_results(context: &egui::Context) -> RedirectApp {
+        let mut app = RedirectApp::new(context, None);
+        app.input = "https://example.com/start\nnonsense".into();
         app.results.push(Resolution {
-            input: long_input.clone(),
+            input: "https://example.com/start".into(),
             outcome: Ok("https://example.com/final".into()),
         });
-        let text = run_frame(&context, &mut app, window([600.0, 480.0]));
+        app.results.push(Resolution {
+            input: "nonsense".into(),
+            outcome: Err("Enter a full link.".into()),
+        });
+        app
+    }
+
+    #[test]
+    fn results_actions_live_in_the_results_header_not_beside_resolve() {
+        let context = egui::Context::default();
+        let mut app = app_with_mixed_results(&context);
+        let painted = painted_positions(&context, &mut app, [860.0, 680.0]);
+        let resolve = position_of(&painted, "Resolve");
+        let load = position_of(&painted, "Load file…");
+        let title = position_of(&painted, "Results");
+        let copy_all = position_of(&painted, "Copy resolved links");
+        let save = position_of(&painted, "Save…");
+        let first_destination = position_of(&painted, "https://example.com/final");
+        // Load file and Resolve share the input card's row; the batch actions do not.
+        assert!((load.y - resolve.y).abs() < 2.0);
+        for action in [copy_all, save] {
+            assert!(
+                action.y > resolve.y + 20.0,
+                "a results action is on the input row"
+            );
+            assert!(
+                (action.y - title.y).abs() < 12.0,
+                "a results action is not on the header bar"
+            );
+            assert!(
+                action.y < first_destination.y,
+                "a results action is below the table"
+            );
+        }
+        assert!(copy_all.x < save.x, "Copy should read before Save");
+    }
+
+    #[test]
+    fn wide_windows_show_a_table_and_narrow_ones_stack_each_link() {
+        let context = egui::Context::default();
+        let mut app = app_with_mixed_results(&context);
+        let wide = run_frame(&context, &mut app, window([860.0, 680.0]));
+        for heading in ["#", "Status", "Original link", "Destination"] {
+            assert!(
+                wide.lines().any(|line| line == heading),
+                "missing {heading}"
+            );
+        }
+        assert!(!wide.contains("Why it failed"));
+        let narrow = run_scrolling_frames(&context, &mut app, [300.0, 240.0]);
+        assert!(!narrow.lines().any(|line| line == "Status"));
+        for label in ["1.", "Original link", "Destination", "Why it failed"] {
+            assert!(narrow.contains(label), "missing {label} when stacked");
+        }
+    }
+
+    #[test]
+    fn destinations_wrap_in_full_and_original_links_keep_their_full_accessible_name() {
+        let context = egui::Context::default();
+        context.enable_accesskit();
+        let mut app = RedirectApp::new(&context, None);
+        let long_input = format!("https://example.com/{}", "source/".repeat(40));
+        let long_destination = format!("https://example.org/{}", "final/".repeat(40));
+        app.results.push(Resolution {
+            input: long_input.clone(),
+            outcome: Ok(long_destination.clone()),
+        });
+        for size in [[860.0, 680.0], [300.0, 240.0]] {
+            let mut output = context.run_ui(window(size), |ui| app.draw(ui));
+            output.textures_delta.clear();
+            let painted: Vec<String> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                painted.iter().any(|text| text == &long_destination),
+                "destination was cut short at {size:?}"
+            );
+            assert!(
+                !painted.iter().any(|text| text == &long_input),
+                "original link was expected to be truncated at {size:?}"
+            );
+            let update = output.platform_output.accesskit_update.unwrap();
+            assert!(
+                update
+                    .nodes
+                    .iter()
+                    .any(|(_, node)| node.label() == Some(long_input.as_str())),
+                "truncated original link lost its full accessible name at {size:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn status_shows_beside_what_caused_it_and_stays_one_live_region() {
+        let context = egui::Context::default();
+        context.enable_accesskit();
+        let mut app = app_with_mixed_results(&context);
+        let live_node = |context: &egui::Context, app: &mut RedirectApp| {
+            let mut output = context.run_ui(window([860.0, 680.0]), |ui| app.draw(ui));
+            output.textures_delta.clear();
+            output
+                .platform_output
+                .accesskit_update
+                .unwrap()
+                .nodes
+                .into_iter()
+                .filter(|(_, node)| node.live() == Some(egui::accesskit::Live::Polite))
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>()
+        };
+
+        app.set_status("Loaded 2 links. Click Resolve to start.", false);
+        let painted = painted_positions(&context, &mut app, [860.0, 680.0]);
         assert!(
-            text.contains(&long_input),
-            "source link was cut short: {text}"
+            position_of(&painted, "Loaded 2 links. Click Resolve to start.").y
+                < position_of(&painted, "Results").y,
+            "input status is not in the input card"
         );
+        let input_region = live_node(&context, &mut app);
+
+        app.apply_event(WorkerEvent::Finished { cancelled: false });
+        let painted = painted_positions(&context, &mut app, [860.0, 680.0]);
+        assert!(
+            position_of(&painted, "Finished: 1 resolved, 1 failed.").y
+                > position_of(&painted, "Results").y,
+            "batch status is not in the results card"
+        );
+        let results_region = live_node(&context, &mut app);
+        assert_eq!(input_region.len(), 1);
+        assert_eq!(
+            input_region, results_region,
+            "the status line became a new live region when it moved"
+        );
+    }
+
+    #[test]
+    fn save_dialog_offers_both_exports_and_returns_focus_on_escape() {
+        let context = egui::Context::default();
+        let mut app = app_with_mixed_results(&context);
+        run_frame(&context, &mut app, window([860.0, 680.0]));
+        app.open_save_dialog();
+        run_frame(&context, &mut app, window([860.0, 680.0]));
+        let open = run_frame(&context, &mut app, window([860.0, 680.0]));
+        for label in [
+            "Save results",
+            "Whole table (CSV)",
+            "Resolved links only (text file)",
+            "Failed links are left out.",
+            "Cancel",
+        ] {
+            assert!(open.contains(label), "missing {label}");
+        }
+        assert!(context.memory(|memory| memory.focused()).is_some());
+        app.export_format = ExportFormat::ResolvedLinks;
+        let mut input = window([860.0, 680.0]);
+        input.events.push(Event::Key {
+            key: Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        run_frame(&context, &mut app, input);
+        assert!(!app.save_dialog_open, "Escape did not close the dialog");
+        assert!(app.worker.is_none(), "closing started a save");
+        assert_eq!(
+            app.export_format,
+            ExportFormat::ResolvedLinks,
+            "choice forgotten"
+        );
+        run_frame(&context, &mut app, window([860.0, 680.0]));
+        assert_eq!(app.pending_focus, None, "focus was not handed back to Save");
+    }
+
+    #[test]
+    fn links_only_export_is_unavailable_when_nothing_resolved() {
+        let context = egui::Context::default();
+        let mut app = RedirectApp::new(&context, None);
+        app.results.push(Resolution {
+            input: "nonsense".into(),
+            outcome: Err("Enter a full link.".into()),
+        });
+        app.export_format = ExportFormat::ResolvedLinks;
+        app.open_save_dialog();
+        assert_eq!(app.export_format, ExportFormat::Table);
+        run_frame(&context, &mut app, window([860.0, 680.0]));
+        let open = run_frame(&context, &mut app, window([860.0, 680.0]));
+        assert!(open.contains("Not available: no link in this batch was resolved."));
+    }
+
+    #[test]
+    fn column_widths_fill_the_table_and_favour_the_destination() {
+        for width in [TABLE_MIN_WIDTH, 820.0, 1600.0] {
+            let ColumnWidths(columns) = ColumnWidths::for_width(width);
+            let total: f32 = columns.iter().sum();
+            assert!(
+                (total - width).abs() < 0.5,
+                "{columns:?} do not add up to {width}"
+            );
+            assert!(
+                columns[3] > columns[2],
+                "destination narrower than original"
+            );
+            assert!(
+                columns[2] > 100.0,
+                "original link column too narrow at {width}"
+            );
+        }
     }
 
     #[test]
@@ -1913,4 +2152,25 @@ mod tests {
         assert!(app.status.contains("Stopped: 1 resolved, 1 failed"));
         server.join().unwrap();
     }
+    #[test]
+    fn zz_probe() {
+        let context = egui::Context::default();
+        let mut app = RedirectApp::new(&context, None);
+        let long_input = format!("https://example.com/{}", "source/".repeat(40));
+        app.results.push(Resolution { input: long_input.clone(), outcome: Ok("https://x.org/final".into()) });
+        let mut output = context.run_ui(window([860.0, 680.0]), |ui| app.draw(ui));
+        output.textures_delta.clear();
+        for shape in &output.shapes {
+            if let egui::epaint::Shape::Text(text) = &shape.shape {
+                if text.galley.text().contains("source/") {
+                    eprintln!("PROBE len={} elided={} width={} rows={}", text.galley.text().len(), text.galley.elided, text.galley.size().x, text.galley.rows.len());
+                }
+            }
+        }
+        let mut app = app_with_mixed_results(&context);
+        let narrow = run_scrolling_frames(&context, &mut app, [300.0, 240.0]);
+        let mut lines: Vec<&str> = narrow.lines().collect(); lines.sort(); lines.dedup();
+        eprintln!("PROBE narrow: {lines:?}");
+    }
+
 }

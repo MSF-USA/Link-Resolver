@@ -13,7 +13,7 @@ use eframe::egui::{self, Color32, Id, Key, Modifiers, Response, RichText, Sense,
 use link_resolver::input::{Loaded, load_file, parse_urls};
 use link_resolver::links::is_link;
 use link_resolver::resolver::Resolver;
-use link_resolver::results::{Resolution, save_csv};
+use link_resolver::results::{ExportFormat, Resolution, save_results};
 use link_resolver::table::{PREVIEW_ROWS, Table, abbreviate};
 use link_resolver::{APP_NAME, VERSION};
 
@@ -29,12 +29,21 @@ enum WorkerEvent {
     Failed(String),
 }
 
+/// Which card shows the status line. Messages appear next to the controls that caused them:
+/// loading and resolving in the input card, finishing, copying and saving in the results card.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StatusArea {
+    Input,
+    Results,
+}
+
 /// Own the editable input, latest results and at most one background operation.
 pub(crate) struct RedirectApp {
     input: String,
     results: Vec<Resolution>,
     status: String,
     is_error: bool,
+    status_area: StatusArea,
     worker: Option<mpsc::Receiver<WorkerEvent>>,
     cancellation: Option<Arc<AtomicBool>>,
     total: usize,
@@ -47,6 +56,10 @@ pub(crate) struct RedirectApp {
     column_choice: Option<ColumnChoice>,
     /// Where keyboard focus should go on the next frame after a dialog opens or closes.
     pending_focus: Option<FocusTarget>,
+    /// Whether the Save dialog is open over the page.
+    save_dialog_open: bool,
+    /// The export chosen most recently in the Save dialog, offered first next time.
+    export_format: ExportFormat,
 }
 
 /// A table whose link column could not be chosen automatically.
@@ -67,10 +80,16 @@ enum FocusTarget {
     ColumnDialog,
     /// The Load file button, where the column chooser came from.
     LoadButton,
+    /// The first enabled choice in the Save dialog.
+    SaveDialog,
+    /// The Save button in the results header.
+    SaveButton,
 }
 
 /// Width of the Settings dialog in points before clamping to the window.
 const SETTINGS_DIALOG_WIDTH: f32 = 440.0;
+/// Width of the Save dialog in points before clamping to the window.
+const SAVE_DIALOG_WIDTH: f32 = 480.0;
 /// Width of the column chooser; wide so a few columns of links fit without scrolling.
 const COLUMN_DIALOG_WIDTH: f32 = 820.0;
 /// Longest cell text shown in the column preview grid.
@@ -239,6 +258,7 @@ impl RedirectApp {
             results: Vec::new(),
             status: "Paste links or load a text file to begin.".into(),
             is_error: false,
+            status_area: StatusArea::Input,
             worker: None,
             cancellation: None,
             total: 0,
@@ -247,12 +267,14 @@ impl RedirectApp {
             settings_open: false,
             column_choice: None,
             pending_focus: None,
+            save_dialog_open: false,
+            export_format: ExportFormat::default(),
         }
     }
 
     /// Whether a dialog is covering the page.
     fn dialog_open(&self) -> bool {
-        self.settings_open || self.column_choice.is_some()
+        self.settings_open || self.column_choice.is_some() || self.save_dialog_open
     }
 
     /// Move keyboard focus to `response` if `target` is the pending hand-off.
@@ -273,9 +295,34 @@ impl RedirectApp {
         self.pending_focus = Some(FocusTarget::SettingsButton);
     }
 
+    /// Report on loading or resolving, in the input card.
     fn set_status(&mut self, message: impl Into<String>, is_error: bool) {
         self.status = message.into();
         self.is_error = is_error;
+        self.status_area = StatusArea::Input;
+    }
+
+    /// Report on finished batches, copying or saving, in the results card.
+    fn set_results_status(&mut self, message: impl Into<String>, is_error: bool) {
+        self.set_status(message, is_error);
+        self.status_area = StatusArea::Results;
+    }
+
+    fn open_save_dialog(&mut self) {
+        if !self.has_resolved_links() {
+            self.export_format = ExportFormat::Table;
+        }
+        self.save_dialog_open = true;
+        self.pending_focus = Some(FocusTarget::SaveDialog);
+    }
+
+    fn close_save_dialog(&mut self) {
+        self.save_dialog_open = false;
+        self.pending_focus = Some(FocusTarget::SaveButton);
+    }
+
+    fn has_resolved_links(&self) -> bool {
+        self.results.iter().any(|result| result.outcome.is_ok())
     }
 
     fn launch_worker(
@@ -348,7 +395,8 @@ impl RedirectApp {
         }
     }
 
-    fn save_results(&mut self, context: &egui::Context) {
+    /// Ask for a new file name on a worker thread and save the latest batch in `format`.
+    fn save_results(&mut self, context: &egui::Context, format: ExportFormat) {
         if self.worker.is_some() || self.results.is_empty() {
             return;
         }
@@ -356,19 +404,19 @@ impl RedirectApp {
         if self.launch_worker(context, move |sender, context| {
             let outcome = rfd::FileDialog::new()
                 .set_title("Save results — choose a new file name")
-                .add_filter("CSV spreadsheet", &["csv"])
-                .set_file_name("results.csv")
+                .add_filter(format.file_type(), &[format.extension()])
+                .set_file_name(format.default_file_name())
                 .save_file()
                 .map(|mut path| {
                     if path.extension().is_none() {
-                        path.set_extension("csv");
+                        path.set_extension(format.extension());
                     }
-                    save_csv(&path, &results).map(|()| path)
+                    save_results(&path, &results, format).map(|()| path)
                 })
                 .transpose();
             notify(&sender, &context, WorkerEvent::Saved(outcome));
         }) {
-            self.set_status(
+            self.set_results_status(
                 "Choose where to save the results. Existing files are kept.",
                 false,
             );
@@ -411,12 +459,11 @@ impl RedirectApp {
             WorkerEvent::Loaded(Ok(None)) => self.set_status("Load cancelled.", false),
             WorkerEvent::Loaded(Err(error)) => self.set_status(error, true),
             WorkerEvent::Saved(Ok(Some(path))) => {
-                self.set_status(format!("Saved results to {}.", path.display()), false);
+                self.set_results_status(format!("Saved results to {}.", path.display()), false);
             }
-            WorkerEvent::Saved(Ok(None)) => self.set_status("Save cancelled.", false),
-            WorkerEvent::Saved(Err(error)) | WorkerEvent::Failed(error) => {
-                self.set_status(error, true);
-            }
+            WorkerEvent::Saved(Ok(None)) => self.set_results_status("Save cancelled.", false),
+            WorkerEvent::Saved(Err(error)) => self.set_results_status(error, true),
+            WorkerEvent::Failed(error) => self.set_status(error, true),
             WorkerEvent::Finished { cancelled } => {
                 let succeeded = self
                     .results
@@ -425,7 +472,7 @@ impl RedirectApp {
                     .count();
                 let failed = self.results.len() - succeeded;
                 let prefix = if cancelled { "Stopped" } else { "Finished" };
-                self.set_status(
+                self.set_results_status(
                     format!("{prefix}: {succeeded} resolved, {failed} failed."),
                     failed > 0,
                 );

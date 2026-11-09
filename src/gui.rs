@@ -108,7 +108,8 @@ const TABLE_MIN_WIDTH: f32 = 600.0;
 /// Fixed results table columns; the original link and destination share what is left.
 const NUMBER_COLUMN_WIDTH: f32 = 40.0;
 const STATUS_COLUMN_WIDTH: f32 = 100.0;
-const ACTION_COLUMN_WIDTH: f32 = 84.0;
+/// Fits the Copy button (about 64 points) plus the cell padding.
+const ACTION_COLUMN_WIDTH: f32 = 96.0;
 /// Share of the flexible width given to the (truncated) original link.
 const ORIGINAL_COLUMN_SHARE: f32 = 0.4;
 /// Padding inside each table cell.
@@ -1290,6 +1291,8 @@ fn draw_results_table(
             2 => original_link(ui, result, palette),
             3 => destination(ui, result),
             _ => {
+                // A button label never wraps; the column is sized for it.
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                 if copy_button(ui, index, result, palette) {
                     copied = Some(index);
                 }

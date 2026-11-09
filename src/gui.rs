@@ -298,9 +298,11 @@ impl RedirectApp {
         self.settings_open || self.column_choice.is_some() || self.save_dialog_open
     }
 
-    /// Move keyboard focus to `response` if `target` is the pending hand-off.
+    /// Move keyboard focus to `response` if `target` is the pending hand-off. A disabled
+    /// control cannot hold focus (egui drops it on the next frame), so the hand-off waits
+    /// until the control is enabled, for example until a save or load worker finishes.
     fn deliver_focus(&mut self, target: FocusTarget, response: &Response) {
-        if self.pending_focus == Some(target) {
+        if self.pending_focus == Some(target) && response.enabled() {
             response.request_focus();
             self.pending_focus = None;
         }
@@ -548,9 +550,12 @@ impl RedirectApp {
                     &palette,
                 ));
                 ui.add_space(10.0);
-                self.draw_input_card(ui, &palette, idle);
+                // Read once per frame: an action in the results header can move the status,
+                // and the card that already drew it must not be joined by a second copy.
+                let status_area = self.status_area;
+                self.draw_input_card(ui, &palette, idle, status_area);
                 ui.add_space(SECTION_GAP);
-                self.draw_results_card(ui, &palette, idle);
+                self.draw_results_card(ui, &palette, idle, status_area);
                 ui.add_space(5.0);
                 ui.label(secondary_text(
                     "Only use links you trust. Each link can take up to 30 seconds.",
@@ -801,7 +806,16 @@ impl RedirectApp {
     }
 
     /// The input card: the link box with its own actions, status line and progress bar.
-    fn draw_input_card(&mut self, ui: &mut egui::Ui, palette: &Palette, idle: bool) {
+    ///
+    /// `status_area` is where the status line belongs this frame, read before either card is
+    /// drawn so it is drawn exactly once.
+    fn draw_input_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &Palette,
+        idle: bool,
+        status_area: StatusArea,
+    ) {
         card_frame(palette)
             .inner_margin(CARD_PADDING)
             .show(ui, |ui| {
@@ -831,7 +845,7 @@ impl RedirectApp {
                 });
                 ui.add_space(4.0);
                 self.draw_input_actions(ui, palette, idle);
-                if self.status_area == StatusArea::Input {
+                if status_area == StatusArea::Input {
                     ui.add_space(4.0);
                     self.draw_status_line(ui, palette);
                 }
@@ -904,7 +918,16 @@ impl RedirectApp {
     }
 
     /// The results card: a header bar with the summary and the batch actions, then the table.
-    fn draw_results_card(&mut self, ui: &mut egui::Ui, palette: &Palette, idle: bool) {
+    ///
+    /// `status_area` is as for [`Self::draw_input_card`]; a status moved by the header's own
+    /// buttons appears here from the next frame.
+    fn draw_results_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &Palette,
+        idle: bool,
+        status_area: StatusArea,
+    ) {
         card_frame(palette).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -913,7 +936,7 @@ impl RedirectApp {
                 CARD_PADDING,
                 CELL_PADDING_Y,
             ));
-            if self.status_area == StatusArea::Results {
+            if status_area == StatusArea::Results {
                 padded.show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
                     self.draw_status_line(ui, palette);
@@ -1822,6 +1845,118 @@ mod tests {
             outcome: Err("Enter a full link.".into()),
         });
         app
+    }
+
+    /// Run one frame of the page at 860 x 680 with `events`, textures discarded.
+    fn page_frame(
+        context: &egui::Context,
+        app: &mut RedirectApp,
+        events: Vec<Event>,
+    ) -> egui::FullOutput {
+        let mut input = window([860.0, 680.0]);
+        input.events = events;
+        let mut output = context.run_ui(input, |ui| {
+            egui::Frame::central_panel(ui.style())
+                .inner_margin(egui::Margin::same(20))
+                .show(ui, |ui| app.draw(ui));
+        });
+        output.textures_delta.clear();
+        output
+    }
+
+    fn painted_texts(output: &egui::FullOutput) -> Vec<String> {
+        output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn pointer_button(position: egui::Pos2, pressed: bool) -> Event {
+        Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn copying_from_the_header_moves_the_status_without_drawing_it_twice() {
+        let context = egui::Context::default();
+        let mut app = app_with_mixed_results(&context);
+        let loaded = "Loaded 2 links. Click Resolve to start.";
+        let copied = "Resolved links copied. Paste them anywhere.";
+        app.set_status(loaded, false);
+        let painted = painted_positions(&context, &mut app, [860.0, 680.0]);
+        // Text is painted inside the button's padding, so a few points in is on the button.
+        let copy_all = position_of(&painted, "Copy resolved links") + egui::vec2(4.0, 4.0);
+        page_frame(&context, &mut app, vec![Event::PointerMoved(copy_all)]);
+        page_frame(&context, &mut app, vec![pointer_button(copy_all, true)]);
+        let click_frame = page_frame(&context, &mut app, vec![pointer_button(copy_all, false)]);
+        assert_eq!(
+            app.status, copied,
+            "the click did not reach Copy resolved links"
+        );
+        // The status line has one fixed id, so drawing it in both cards in one frame is an
+        // id clash (and one AccessKit node for two widgets). Each card paints it under its
+        // own message, so two status messages in one frame is the visible sign.
+        let status_lines = painted_texts(&click_frame)
+            .into_iter()
+            .filter(|text| text == loaded || text == copied)
+            .count();
+        assert_eq!(
+            status_lines, 1,
+            "the status line was drawn in both cards in one frame"
+        );
+        let painted = painted_positions(&context, &mut app, [860.0, 680.0]);
+        assert!(
+            position_of(&painted, copied).y > position_of(&painted, "Results").y,
+            "the copy message did not move to the results card"
+        );
+    }
+
+    #[test]
+    fn focus_returns_to_save_once_the_file_chooser_finishes() {
+        let context = egui::Context::default();
+        context.enable_accesskit();
+        let mut app = app_with_mixed_results(&context);
+        page_frame(&context, &mut app, Vec::new());
+        // Confirming the dialog queues focus for Save while the file chooser worker runs,
+        // which disables Save until it finishes.
+        app.close_save_dialog();
+        let (sender, receiver) = mpsc::channel();
+        app.worker = Some(receiver);
+        for _ in 0..3 {
+            page_frame(&context, &mut app, Vec::new());
+        }
+        assert_eq!(
+            app.pending_focus,
+            Some(FocusTarget::SaveButton),
+            "the hand-off was spent on a disabled button"
+        );
+        drop(sender);
+        app.apply_event(WorkerEvent::Saved(Ok(None)));
+        // One frame delivers the hand-off; focus is in the tree from the next one.
+        page_frame(&context, &mut app, Vec::new());
+        assert_eq!(app.pending_focus, None, "the hand-off was not delivered");
+        let update = page_frame(&context, &mut app, Vec::new())
+            .platform_output
+            .accesskit_update
+            .expect("AccessKit tree was not produced");
+        let focused_label = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == update.focus)
+            .and_then(|(_, node)| node.label().map(str::to_owned));
+        assert_eq!(
+            focused_label.as_deref(),
+            Some("Save…"),
+            "focus is not on Save"
+        );
     }
 
     #[test]

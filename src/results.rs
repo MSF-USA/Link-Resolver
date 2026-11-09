@@ -101,7 +101,10 @@ fn create_new(path: &Path) -> Result<File, String> {
 
 /// One resolved destination per line. Failures have no destination, so they are skipped.
 fn write_resolved_links(mut writer: impl Write, results: &[Resolution]) -> std::io::Result<()> {
-    for url in results.iter().filter_map(|result| result.outcome.as_ref().ok()) {
+    for url in results
+        .iter()
+        .filter_map(|result| result.outcome.as_ref().ok())
+    {
         writeln!(writer, "{url}")?;
     }
     writer.flush()
@@ -206,7 +209,10 @@ mod tests {
                     assert!(written.contains("broken,,FAILED,Enter a full link."));
                 }
                 ExportFormat::ResolvedLinks => {
-                    assert_eq!(written, "https://a.example/final\nhttps://b.example/final\n");
+                    assert_eq!(
+                        written,
+                        "https://a.example/final\nhttps://b.example/final\n"
+                    );
                 }
             }
             assert_eq!(path.extension().unwrap(), format.extension());

@@ -886,13 +886,17 @@ impl RedirectApp {
             } else {
                 palette.text
             };
-            ui.scope_builder(egui::UiBuilder::new().id(Id::new(STATUS_LINE_ID)), |ui| {
-                let status = ui.add(egui::Label::new(RichText::new(&self.status).color(color)).wrap());
-                // Screen readers announce changes to this line without moving focus.
-                ui.ctx().accesskit_node_builder(status.id, |node| {
-                    node.set_live(egui::accesskit::Live::Polite);
-                });
-            });
+            ui.scope_builder(
+                egui::UiBuilder::new().scope_id(Id::unique(STATUS_LINE_ID)),
+                |ui| {
+                    let status =
+                        ui.add(egui::Label::new(RichText::new(&self.status).color(color)).wrap());
+                    // Screen readers announce changes to this line without moving focus.
+                    ui.ctx().accesskit_node_builder(status.id, |node| {
+                        node.set_live(egui::accesskit::Live::Polite);
+                    });
+                },
+            );
         });
     }
 
@@ -1200,8 +1204,11 @@ fn card_frame(palette: &Palette) -> egui::Frame {
 /// A full-width hairline between table rows, in the decorative border colour.
 fn draw_row_rule(ui: &mut egui::Ui, palette: &Palette) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), Sense::hover());
-    ui.painter()
-        .hline(rect.x_range(), rect.center().y, Stroke::new(1.0, palette.border));
+    ui.painter().hline(
+        rect.x_range(),
+        rect.center().y,
+        Stroke::new(1.0, palette.border),
+    );
 }
 
 /// Widths of the results table columns for a given table width. Number, status and the Copy
@@ -1339,8 +1346,9 @@ fn status_text(result: &Resolution, palette: &Palette) -> RichText {
 /// The original link on one line, cut short with an ellipsis when it does not fit. The full
 /// text is the accessible name and the hover text; it is also in the text box and the CSV.
 fn original_link(ui: &mut egui::Ui, result: &Resolution, palette: &Palette) {
-    let response =
-        ui.add(egui::Label::new(RichText::new(&result.input).color(palette.text_secondary)).truncate());
+    let response = ui.add(
+        egui::Label::new(RichText::new(&result.input).color(palette.text_secondary)).truncate(),
+    );
     let full_text = result.input.clone();
     ui.ctx()
         .accesskit_node_builder(response.id, |node| node.set_label(full_text));

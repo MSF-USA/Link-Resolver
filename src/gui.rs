@@ -524,7 +524,9 @@ impl RedirectApp {
         let idle = self.worker.is_none();
 
         // One page-level scroll area keeps every control reachable at high zoom or in a
-        // small window; nested scroll regions would trap keyboard users.
+        // small window; nested scroll regions would trap keyboard users. A solid scroll bar
+        // takes its own space instead of floating over the cards' right border.
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
         egui::ScrollArea::vertical()
             .id_salt("page")
             .auto_shrink([false, false])

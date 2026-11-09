@@ -974,8 +974,13 @@ impl RedirectApp {
                     ui.label(secondary_text(&summary, palette));
                     title
                 };
+                // Labels are placed before the buttons, so the row is given the button height up
+                // front; otherwise the title sits at the top while the buttons are centred.
+                let button_height = ui.text_style_height(&egui::TextStyle::Button)
+                    + 2.0 * ui.spacing().button_padding.y;
                 let title = if wide {
                     ui.horizontal(|ui| {
+                        ui.set_min_height(button_height);
                         let title = title_row(ui);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             self.draw_results_actions(ui, palette, idle);

@@ -26,10 +26,16 @@ def crate_version(argument: str) -> str:
 
     ``v1.20261106`` becomes ``1.20261106.0`` and ``v1.20261106.2`` becomes
     ``1.20261106.2``; a value that is already three numbers is returned as is.
-    Raises ``ValueError`` for anything else.
+    Date-based release suffixes must be 0..99 to fit all platform bundle formats.
+    Raises ``ValueError`` for an unsupported shape or an out-of-range suffix.
     """
     tag = TAG_PATTERN.match(argument)
     if tag:
+        if int(tag.group(2) or 0) > 99:
+            raise ValueError(
+                f"{argument!r} has a release suffix above 99; "
+                "date-based releases require a suffix from 0 to 99 for macOS compatibility"
+            )
         return f"1.{tag.group(1)}.{tag.group(2) or 0}"
     if CRATE_PATTERN.match(argument):
         return argument

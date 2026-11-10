@@ -19,6 +19,18 @@ If it says "Permission denied", give your copy execute permission:
   chmod +x link-resolver
 Then run it again. Neither command needs administrator permission.
 
+MACOS
+Published downloads require macOS 13+ and Apple Silicon (M1, M2, M3 and later).
+Archive names ending macos-arm64 are for Apple Silicon; macos-x64 is for Intel
+(available as a source-build option, not currently published).
+Extract the matching terminal ZIP, open Terminal in that folder, and run:
+  ./link-resolver --help
+The macOS build is ad-hoc signed, not Developer ID signed
+or notarized; Gatekeeper may block the downloaded executable. Only if you trust
+it, attempt to run it, then check System Settings > Privacy & Security for
+Open Anyway. Your organization's policies may prevent this or require approval.
+Do not disable Gatekeeper or remove quarantine protections globally.
+
 THE MENU
 1. Paste URLs: paste one full link per line. Enter an empty line to start.
 2. Load a text file: type the file's full path. Outer quotes are accepted.
@@ -45,6 +57,6 @@ It contacts redirect destinations, which could include local-network addresses.
 COMMAND-LINE USAGE
 Windows:
   link-resolver.exe --file urls.txt --output results.csv
-Linux:
+Linux/macOS:
   ./link-resolver --file urls.txt --output results.csv
 Use --help for more options.

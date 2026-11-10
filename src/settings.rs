@@ -226,7 +226,11 @@ impl Settings {
             ));
         });
         ui.label(theme::secondary_text(
-            "Ctrl and + or - also change the size. Ctrl and 0 resets it.",
+            if cfg!(target_os = "macos") {
+                "Cmd and + or - also change the size. Cmd and 0 resets it."
+            } else {
+                "Ctrl and + or - also change the size. Ctrl and 0 resets it."
+            },
             palette,
         ));
         ui.add_space(12.0);

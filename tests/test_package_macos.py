@@ -3,10 +3,12 @@
 import hashlib
 import importlib.util
 import pathlib
+import platform
 import plistlib
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -55,6 +57,12 @@ class MacOSPackagingTests(unittest.TestCase):
             if arguments[1] == '-L':
                 return 'fixture:\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)'
             return 'Load command 1\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform 1\n    minos 13.0\n      sdk 15.0\n'
+        elif arguments[0] == 'lipo':
+            # Apple's -verify_arch consumes all remaining arguments as architectures.
+            self.assertEqual(arguments[2], '-verify_arch')
+            self.assertTrue(pathlib.Path(arguments[1]).is_file())
+            self.assertIn(arguments[3], ('arm64', 'x86_64'))
+            self.assertEqual(len(arguments), 4)
         elif arguments[-1] == '--version':
             return 'Link Resolver 1.20261110.2'
         return ''
@@ -109,8 +117,25 @@ class MacOSPackagingTests(unittest.TestCase):
         archives = self.build('x86_64-apple-darwin')
         self.assertTrue(all(path.name.endswith('macos-x64.zip') for path in archives))
         self.assertEqual(other.read_bytes(), b'existing archive')
-        self.assertIn(['lipo', '-verify_arch', 'x86_64',
-                       str(self.root / 'target/x86_64-apple-darwin/release/link-resolver')], self.calls)
+        self.assertIn(['lipo', str(self.root / 'target/x86_64-apple-darwin/release/link-resolver'),
+                       '-verify_arch', 'x86_64'], self.calls)
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'requires native Apple tools')
+    def test_native_macho_validation_accepts_host_cpu_and_rejects_wrong_cpu(self):
+        """Compile a real Mach-O and exercise Apple's lipo/otool without tool mocks."""
+        source = self.root / 'native-fixture.c'
+        binary = self.root / 'native-fixture'
+        source.write_text('int main(void) { return 0; }\n', encoding='utf-8')
+        subprocess.run(
+            ['clang', '-mmacosx-version-min=13.0', str(source), '-o', str(binary)],
+            cwd=self.root, check=True, capture_output=True, text=True, timeout=60,
+        )
+        architecture = platform.machine()
+        self.assertIn(architecture, ('arm64', 'x86_64'))
+        packager.check_binary(binary, architecture, '13.0', self.root)
+        wrong_architecture = 'x86_64' if architecture == 'arm64' else 'arm64'
+        with self.assertRaises(subprocess.CalledProcessError):
+            packager.check_binary(binary, wrong_architecture, '13.0', self.root)
 
     def test_invalid_platform_target_or_baseline_fails_before_building(self):
         """Invalid options and non-Mac hosts cannot start tools or write distribution files."""

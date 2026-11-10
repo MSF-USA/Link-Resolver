@@ -164,6 +164,38 @@ def write_archive(folder, destination):
         temporary.unlink(missing_ok=True)
 
 
+def publish_files(files, dist):
+    """Publish staged Paths into dist as a set, restoring old files on an OSError.
+
+    files must have distinct names. Copies and backups are prepared inside dist
+    before replacement so renames stay on one filesystem. Returns None; I/O
+    errors propagate after rollback. Unrelated distribution files are untouched.
+    """
+    with tempfile.TemporaryDirectory(prefix='.macos-publish-', dir=dist) as scratch:
+        transaction = pathlib.Path(scratch)
+        backups = transaction / 'backups'
+        backups.mkdir()
+        for source in files:
+            shutil.copy2(source, transaction / source.name)
+            destination = dist / source.name
+            if destination.exists():
+                shutil.copy2(destination, backups / source.name)
+        installed = []
+        try:
+            for source in files:
+                destination = dist / source.name
+                (transaction / source.name).replace(destination)
+                installed.append(destination)
+        except OSError:
+            for destination in reversed(installed):
+                backup = backups / destination.name
+                if backup.exists():
+                    backup.replace(destination)
+                else:
+                    destination.unlink()
+            raise
+
+
 def package(root, target, deployment_target):
     """Build and check target, then write two ZIPs and macOS checksums; raise on failure.
 
@@ -199,6 +231,7 @@ def package(root, target, deployment_target):
     dist.mkdir(exist_ok=True)
     archives = []
     with tempfile.TemporaryDirectory(prefix='macos-staging-', dir=root / 'target') as scratch:
+        staged_archives = []
         for gui in (True, False):
             folder = pathlib.Path(scratch) / ('gui' if gui else 'terminal')
             folder.mkdir()
@@ -220,16 +253,19 @@ def package(root, target, deployment_target):
             run(['codesign', '--force', '--sign', '-', str(cli)], root)
             run(['codesign', '--verify', '--strict', str(cli)], root)
             name = f'link-resolver-{"gui-" if gui else ""}macos-{label}.zip'
-            destination = dist / name
+            destination = pathlib.Path(scratch) / name
             write_archive(folder, destination)
-            archives.append(destination)
-    checksum_lines = []
-    for path in archives:
-        with path.open('rb') as source:
-            digest = hashlib.file_digest(source, 'sha256').hexdigest()
-        checksum_lines.append(f'{digest}  {path.name}\n')
-    sums = ''.join(checksum_lines)
-    (dist / f'SHA256SUMS-macos-{label}').write_text(sums, encoding='utf-8')
+            staged_archives.append(destination)
+            archives.append(dist / name)
+        checksum_lines = []
+        for path in staged_archives:
+            with path.open('rb') as source:
+                digest = hashlib.file_digest(source, 'sha256').hexdigest()
+            checksum_lines.append(f'{digest}  {path.name}\n')
+        sums = ''.join(checksum_lines)
+        checksums = pathlib.Path(scratch) / f'SHA256SUMS-macos-{label}'
+        checksums.write_text(sums, encoding='utf-8')
+        publish_files([*staged_archives, checksums], dist)
     print(sums, end='')
     return archives
 

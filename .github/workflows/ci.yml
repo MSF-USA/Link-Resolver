@@ -2,7 +2,7 @@
 #
 # - lint: rustfmt and clippy (warnings are errors), for the GUI build and the CLI-only build.
 # - build-and-test: the full Rust suite and the Bash/PowerShell script tests on Linux and
-#   Windows, then a release build whose binaries are kept for a week as a smoke-test artifact.
+#   Windows and macOS, then a release build kept for a week as a smoke-test artifact.
 #   Windows is the only place the PowerShell script test runs, so it is a real check here.
 # - msrv: the crate still compiles on the minimum Rust version declared in Cargo.toml.
 name: CI
@@ -44,10 +44,12 @@ jobs:
   build-and-test:
     name: Build and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-15]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -62,10 +64,14 @@ jobs:
         run: cargo test --locked
       - name: Rust tests (CLI only, no GUI dependencies)
         run: cargo test --locked --no-default-features
-      - name: Script tests (Bash on Linux, PowerShell on Windows)
+      - name: Script and packaging tests
         run: python -m unittest discover -s tests -v
       - name: Release build
+        if: runner.os != 'macOS'
         run: cargo build --release --locked
+      - name: Package macOS app and CLI (Apple Silicon, ad-hoc signed)
+        if: runner.os == 'macOS'
+        run: python3 packaging/package-macos.py
       - name: Keep the binaries for a week
         uses: actions/upload-artifact@v7
         with:
@@ -75,6 +81,8 @@ jobs:
             target/release/link-resolver-cli
             target/release/link-resolver.exe
             target/release/link-resolver-cli.exe
+            dist/link-resolver*macos-arm64.zip
+            dist/SHA256SUMS-macos-arm64
           if-no-files-found: error
           retention-days: 7
 

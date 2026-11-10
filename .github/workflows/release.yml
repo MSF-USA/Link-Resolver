@@ -12,7 +12,7 @@
 # version at build time with packaging/stamp-version.py; nothing is committed back.
 # Linux archives come from packaging/package-dist.sh --linux-only, Windows archives from
 # packaging/package-windows.ps1 on Windows and packaging/package-macos.py on macOS.
-# The Apple Silicon app is ad-hoc signed, not Developer ID signed or notarized. Tests use
+# The macOS apps are ad-hoc signed, not Developer ID signed or notarized. Tests use
 # loopback servers only; no job contacts a real URL.
 name: Release
 
@@ -155,16 +155,26 @@ jobs:
           retention-days: 3
 
   macos:
-    name: macOS archives (Apple Silicon)
+    name: macOS archives (${{ matrix.arch }})
     needs: version
-    runs-on: macos-15
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: aarch64-apple-darwin
+            arch: arm64
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x64
     env:
       MACOSX_DEPLOYMENT_TARGET: "13.0"
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v7
         with:
@@ -178,13 +188,13 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings
           python3 -m unittest discover -s tests -v
       - name: Build the macOS archives
-        run: python3 packaging/package-macos.py
+        run: python3 packaging/package-macos.py --target "${{ matrix.target }}"
       - uses: actions/upload-artifact@v7
         with:
-          name: macos-archives
+          name: macos-${{ matrix.arch }}-archives
           path: |
-            dist/link-resolver-gui-macos-arm64.zip
-            dist/link-resolver-macos-arm64.zip
+            dist/link-resolver-gui-macos-${{ matrix.arch }}.zip
+            dist/link-resolver-macos-${{ matrix.arch }}.zip
           if-no-files-found: error
           retention-days: 3
 
@@ -204,7 +214,8 @@ jobs:
           cd release
           sha256sum link-resolver-gui-windows-x64.zip link-resolver-gui-linux-x64.tar.gz \
                      link-resolver-windows-x64.zip link-resolver-linux-x64.tar.gz \
-                     link-resolver-gui-macos-arm64.zip link-resolver-macos-arm64.zip > SHA256SUMS
+                     link-resolver-gui-macos-arm64.zip link-resolver-macos-arm64.zip \
+                     link-resolver-gui-macos-x64.zip link-resolver-macos-x64.zip > SHA256SUMS
           cat SHA256SUMS
       - name: Tag the release commit
         if: needs.version.outputs.created_tag == 'true'
@@ -231,7 +242,9 @@ jobs:
             printf '| link-resolver-linux-x64.tar.gz | Terminal-only edition for Linux, fully static |\n'
             printf '| link-resolver-gui-macos-arm64.zip | Desktop app and CLI for Apple Silicon, macOS 13+ (not notarized) |\n'
             printf '| link-resolver-macos-arm64.zip | Terminal-only edition for Apple Silicon, macOS 13+ |\n'
-            printf '\nmacOS downloads are ad-hoc signed, not Developer ID signed or notarized. Gatekeeper may block them; see QUICKSTART.txt for security guidance. Intel Macs are not supported by these archives.\n'
+            printf '| link-resolver-gui-macos-x64.zip | Desktop app and CLI for Intel Macs, macOS 13+ (not notarized) |\n'
+            printf '| link-resolver-macos-x64.zip | Terminal-only edition for Intel Macs, macOS 13+ |\n'
+            printf '\nmacOS downloads are ad-hoc signed, not Developer ID signed or notarized. Gatekeeper may block them; see QUICKSTART.txt for security guidance. Choose arm64 for Apple Silicon or x64 for Intel. Both require macOS 13 or newer.\n'
             printf '\n## SHA-256\n\n```\n'
             cat release/SHA256SUMS
             printf '```\n'
@@ -245,4 +258,6 @@ jobs:
             release/link-resolver-linux-x64.tar.gz \
             release/link-resolver-gui-macos-arm64.zip \
             release/link-resolver-macos-arm64.zip \
+            release/link-resolver-gui-macos-x64.zip \
+            release/link-resolver-macos-x64.zip \
             release/SHA256SUMS

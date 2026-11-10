@@ -49,7 +49,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-15]
+        os: [ubuntu-latest, windows-latest, macos-15, macos-15-intel]
+        include:
+          - os: macos-15
+            macos_target: aarch64-apple-darwin
+          - os: macos-15-intel
+            macos_target: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -69,20 +74,20 @@ jobs:
       - name: Release build
         if: runner.os != 'macOS'
         run: cargo build --release --locked
-      - name: Package macOS app and CLI (Apple Silicon, ad-hoc signed)
+      - name: Package macOS app and CLI (native, ad-hoc signed)
         if: runner.os == 'macOS'
-        run: python3 packaging/package-macos.py
+        run: python3 packaging/package-macos.py --target "${{ matrix.macos_target }}"
       - name: Keep the binaries for a week
         uses: actions/upload-artifact@v7
         with:
-          name: link-resolver-${{ runner.os }}
+          name: link-resolver-${{ runner.os }}-${{ runner.arch }}
           path: |
             target/release/link-resolver
             target/release/link-resolver-cli
             target/release/link-resolver.exe
             target/release/link-resolver-cli.exe
-            dist/link-resolver*macos-arm64.zip
-            dist/SHA256SUMS-macos-arm64
+            dist/link-resolver*macos-*.zip
+            dist/SHA256SUMS-macos-*
           if-no-files-found: error
           retention-days: 7
 

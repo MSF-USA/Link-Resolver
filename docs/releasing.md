@@ -43,7 +43,8 @@ the repository keeps `0.1.0`.
   machine: run `cargo test --locked`, then the script, then `--version` on the packaged
   executable.
   On an Apple Silicon Mac, run `cargo test --locked`, then
-  `python3 packaging/package-macos.py`. This checks Mach-O architecture, macOS
+  `python3 packaging/package-macos.py`. On Intel, pass `--target x86_64-apple-darwin`.
+  This checks Mach-O architecture, macOS
   deployment versions, system-only dependencies, CLI version, bundle metadata and
   ad-hoc signatures. Native GUI interaction is not exercised by the headless tests.
 - `README.md` and `QUICKSTART.txt` describe the behaviour being shipped.
@@ -67,18 +68,19 @@ computers of the people who run the app.
 The workflow then:
 
 1. Computes the version from today's UTC date and the existing tags and releases.
-2. Builds and tests on Linux, Windows and Apple Silicon macOS in parallel, with the version stamped in.
+2. Builds and tests on Linux, Windows and both macOS architectures in parallel, with the version stamped in.
    Linux archives come from `packaging/package-dist.sh --linux-only` (glibc 2.28 baseline
    and a static musl CLI). Windows archives are built natively with the MSVC toolchain by
    `packaging/package-windows.ps1`, which also checks the executables' subsystems and runs
    `link-resolver-cli.exe --help`.
-   macOS archives come from `packaging/package-macos.py` on `macos-15` (ARM64),
-   with a macOS 13.0 deployment target and a Finder-launchable `.app` bundle.
+   macOS archives come from `packaging/package-macos.py` on `macos-15` (ARM64)
+   and `macos-15-intel` (x64), both with a macOS 13.0 deployment target and a
+   Finder-launchable `.app` bundle. Each architecture has separate artifacts.
    They are ad-hoc signed, not Developer ID signed or notarized; no Apple credentials
    are needed. Gatekeeper guidance is included in the archives and release notes.
-3. Only once all three builds pass, tags the chosen commit with the new version and pushes the
+3. Only once all four builds pass, tags the chosen commit with the new version and pushes the
    tag.
-4. Publishes the GitHub release with the six archives, `SHA256SUMS`, your notes, a
+4. Publishes the GitHub release with the eight archives, `SHA256SUMS`, your notes, a
    downloads table and the generated change list.
 
 The run takes roughly ten to fifteen minutes. The release appears under **Releases** on
@@ -107,7 +109,7 @@ create another tag.
 2. Unpack the archive for your platform. `link-resolver-cli --version` prints
    `Link Resolver 1.20261106.0` for `v1.20261106`, and the desktop app shows the same
    version at the bottom of its Settings dialog. The packagers already checked this on
-   all three runners, so this is a last look rather than a test.
+   all four runners, so this is a last look rather than a test.
 3. Share the release page link. The archives need no installation; `QUICKSTART.txt` inside
    each one explains the rest.
 
@@ -145,7 +147,9 @@ On macOS, `python3 packaging/package-macos.py` builds
 `link-resolver-gui-macos-arm64.zip` and `link-resolver-macos-arm64.zip`, plus
 `SHA256SUMS-macos-arm64`. Requires Rust 1.95+, Python 3.11+ and Xcode Command Line
 Tools. `--target x86_64-apple-darwin` produces Intel archives on a compatible host
-with that Rust target installed; Intel archives are not currently published.
+with that Rust target installed: `link-resolver-gui-macos-x64.zip`,
+`link-resolver-macos-x64.zip` and `SHA256SUMS-macos-x64`. Both architectures are
+published and use the same macOS 13.0 minimum.
 `--deployment-target 13.0` selects the baseline (the default). The binary load
 commands and app bundle must agree with it; test older baselines on real hardware
 before advertising support. macOS archives preserve executable permissions.

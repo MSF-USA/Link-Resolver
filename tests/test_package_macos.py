@@ -137,6 +137,28 @@ class MacOSPackagingTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             packager.check_binary(binary, wrong_architecture, '13.0', self.root)
 
+    def test_both_architectures_coexist_with_the_same_macos_minimum(self):
+        """Intel packaging preserves ARM64 downloads; both bundles and hashes target macOS 13."""
+        arm_archives = self.build('aarch64-apple-darwin')
+        arm_checksums = self.root / 'dist/SHA256SUMS-macos-arm64'
+        before = {path: path.read_bytes() for path in [*arm_archives, arm_checksums]}
+        intel_archives = self.build('x86_64-apple-darwin')
+        for path, contents in before.items():
+            self.assertEqual(path.read_bytes(), contents, path.name)
+        for architecture, archives in (('arm64', arm_archives), ('x64', intel_archives)):
+            with self.subTest(architecture=architecture):
+                with zipfile.ZipFile(archives[0]) as archive:
+                    metadata = plistlib.loads(archive.read(
+                        'link-resolver/Link Resolver.app/Contents/Info.plist',
+                    ))
+                    self.assertEqual(metadata['LSMinimumSystemVersion'], '13.0')
+                checksums = (self.root / f'dist/SHA256SUMS-macos-{architecture}').read_text()
+                for path in archives:
+                    self.assertIn(
+                        f'{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n',
+                        checksums,
+                    )
+
     def test_invalid_platform_target_or_baseline_fails_before_building(self):
         """Invalid options and non-Mac hosts cannot start tools or write distribution files."""
         with mock.patch.object(packager, 'run') as tool:

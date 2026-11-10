@@ -10,6 +10,11 @@ Versions are `v1.DATE`, where DATE is the UTC day the release was started, writt
 same day is `v1.20261106.2`, a third `v1.20261106.3`, and so on. The workflow picks the
 next free number itself.
 
+Date-based release suffixes are limited to 0..99 for macOS bundle compatibility.
+The shared version parser rejects a suffix above 99 in the workflow's version
+job, before any platform builds start. If all supported suffixes are taken, wait
+until the next UTC date to release again.
+
 The binaries report the same version with Cargo's three-part form: `v1.20261106` builds
 as crate version `1.20261106.0`, and `v1.20261106.2` as `1.20261106.2`. That is the
 version in the HTTP user agent (`LinkResolver/1.20261106.0`) and in `--help` output, so a

@@ -232,8 +232,9 @@ GitHub Actions in `.github/workflows/` run on every push and pull request:
    archives with `packaging/package-macos.py`. It runs every test suite on all three
   (loopback servers only, no real URLs), then tags and publishes a GitHub release with
   generated notes and the SHA-256 table. Versions are `v1.DATE`: `v1.20261106` for the
-  first release on 6 November 2026, `v1.20261106.2` for a second one that day. The crate
-  version inside the binaries (and the HTTP user agent) is set to the release version at
+  first release on 6 November 2026, `v1.20261106.2` for a second one that day.
+  Date-based suffixes are limited to 0..99 and validated before platform builds.
+  The crate version inside the binaries (and the HTTP user agent) is set to the release version at
   build time by `packaging/stamp-version.py`; nothing is committed back. The step-by-step
   maintainer guide is [`docs/releasing.md`](docs/releasing.md).
 

@@ -31,13 +31,25 @@ PowerShell.
 An internet connection and permission to run downloaded applications are needed.
 Company security policies can still block unsigned executables.
 
+Published releases also include Apple Silicon macOS archives:
+`link-resolver-gui-macos-arm64.zip` (desktop app + CLI) and
+`link-resolver-macos-arm64.zip` (terminal only). They target macOS 13+ and are
+ad-hoc signed, **not Developer ID signed or notarized**. Intel Macs are not
+supported by these downloads.
+
 - **Windows (64-bit):** open `link-resolver.exe` by double-clicking it.
 - **Linux (x86-64):** launch `link-resolver` from your desktop's file manager,
   or run `./link-resolver`. If necessary, run `chmod +x link-resolver` first;
   this does not need administrator access. A normal desktop with X11/Wayland and
   OpenGL support is required. Linux file pickers use the desktop's XDG portal.
   If no portal is available, URLs can still be pasted into the text box and
-  results copied to the clipboard.
+   results copied to the clipboard.
+- **macOS (Apple Silicon, macOS 13+):** extract the ZIP and double-click
+  `Link Resolver.app`. It can run from Downloads; moving it to Applications is
+  optional. Gatekeeper may block it. Only if you trust the download, attempt to
+  open it and then use **System Settings > Privacy & Security > Open Anyway**.
+  Organization policies may prohibit the override or require administrator
+  approval; do not disable Gatekeeper globally.
 
 The window offers:
 
@@ -77,6 +89,9 @@ completion, is fully keyboard operable (Tab, Enter, Space, Ctrl+Enter) and zooms
 with Ctrl and +/-/0. Settings and the window size persist in eframe's per-user
 data folder (`~/.local/share/linkresolver/` on Linux, `%APPDATA%\linkresolver\`
 on Windows) as a small `app.ron` file; no URLs or results are written there.
+On macOS the same shortcuts use Cmd instead of Ctrl; native file dialogs,
+clipboard, system theme and AccessKit's VoiceOver integration are used. CI tests
+and packaging checks do not replace an interactive accessibility assessment.
 Colours, type sizes and fonts come from `src/theme.rs`, which follows the brand
 palette; see [`docs/accessibility-assessment.md`](docs/accessibility-assessment.md)
 for the assessment and the agreed interpretation of the brand book. The bundled
@@ -142,6 +157,27 @@ The GUI binary is `target/release/link-resolver` on Linux or
 folder on the user's computer; no installation or elevated privileges are needed.
 TLS uses Rust libraries, not a separately installed OpenSSL runtime.
 
+On macOS, install Xcode Command Line Tools (`xcode-select --install`), Rust
+1.95+ and Python 3.11+. The native GUI and CLI binaries have the same names as
+Linux. To build Finder-launchable app and terminal-only archives:
+
+```sh
+rustup target add aarch64-apple-darwin
+python3 packaging/package-macos.py
+```
+
+The packager targets macOS 13.0 by default, verifies Mach-O architecture,
+deployment version, system-only dynamic dependencies and the CLI version, then
+ad-hoc signs and verifies the app and CLIs. It writes both macOS ZIPs and
+`SHA256SUMS-macos-arm64` into `dist/`, leaving other platforms' archives alone.
+An Intel build is supported explicitly with `--target x86_64-apple-darwin`
+(install that Rust target first); published releases currently ship Apple Silicon
+only. `--deployment-target MAJOR.MINOR` changes the build baseline and bundle
+metadata; compatibility with an older OS must be tested on that OS. Cross-CPU
+packaging requires the host to be able to run the built CLI for its version check.
+The GUI still uses Apple's deprecated but available OpenGL implementation.
+Developer ID signing and notarization are not configured in this initial build.
+
 To build just the CLI without GUI dependencies:
 
 ```sh
@@ -183,7 +219,8 @@ target Windows 10/11 x64. Other CPU architectures require their own builds.
 GitHub Actions in `.github/workflows/` run on every push and pull request:
 
 - **CI** (`ci.yml`): rustfmt, clippy with warnings as errors (GUI and CLI-only builds),
-  the full test suite and the script tests on Linux and Windows, a release build whose
+   the full test suite and the script tests on Linux, Windows and Apple Silicon macOS,
+   release binaries (macOS app/CLI archives) whose
   binaries are kept for a week, and a build on the minimum Rust version. Windows is where
   the PowerShell script test runs.
 - **Security audit** (`audit.yml`): `cargo audit` against the RustSec database weekly,
@@ -191,11 +228,13 @@ GitHub Actions in `.github/workflows/` run on every push and pull request:
   each with its reason and removal condition, in `.cargo/audit.toml`.
 - **Release** (`release.yml`): manual only, never on a push to `main`. Builds the Linux
   archives with `packaging/package-dist.sh --linux-only` and the Windows archives natively
-  on a Windows runner with `packaging/package-windows.ps1`, runs every test suite on both
+   on a Windows runner with `packaging/package-windows.ps1`, plus Apple Silicon macOS
+   archives with `packaging/package-macos.py`. It runs every test suite on all three
   (loopback servers only, no real URLs), then tags and publishes a GitHub release with
   generated notes and the SHA-256 table. Versions are `v1.DATE`: `v1.20261106` for the
-  first release on 6 November 2026, `v1.20261106.2` for a second one that day. The crate
-  version inside the binaries (and the HTTP user agent) is set to the release version at
+  first release on 6 November 2026, `v1.20261106.2` for a second one that day.
+  Date-based suffixes are limited to 0..99 and validated before platform builds.
+  The crate version inside the binaries (and the HTTP user agent) is set to the release version at
   build time by `packaging/stamp-version.py`; nothing is committed back. The step-by-step
   maintainer guide is [`docs/releasing.md`](docs/releasing.md).
 

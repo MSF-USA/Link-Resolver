@@ -41,6 +41,14 @@ class VersionParsingTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     stamper.crate_version(bad)
 
+    def test_release_suffix_limit_is_checked_before_platform_builds(self):
+        """The parser used by the version job accepts .99 and rejects .100 in every form."""
+        for prefix in ('v1.20261106', '1.20261106'):
+            with self.subTest(prefix=prefix):
+                self.assertEqual(stamper.crate_version(prefix + '.99'), '1.20261106.99')
+                with self.assertRaisesRegex(ValueError, 'suffix above 99'):
+                    stamper.crate_version(prefix + '.100')
+
 
 class StampingTests(unittest.TestCase):
     """Stamping edits exactly the crate's own version in both files and nothing else."""
@@ -101,6 +109,21 @@ class StampingTests(unittest.TestCase):
             stamper.stamp('1.20261106.0', self.scratch)
         manifest = (self.scratch / 'Cargo.toml').read_text(encoding='utf-8')
         self.assertNotIn('1.20261106.0', manifest)
+
+    def test_out_of_range_release_suffix_fails_without_stamping_files(self):
+        """CLI validation rejects .100 before changing the manifest or lockfile."""
+        before = {name: (self.scratch / name).read_bytes() for name in ('Cargo.toml', 'Cargo.lock')}
+        script_copy = self.scratch / 'packaging' / 'stamp-version.py'
+        script_copy.parent.mkdir()
+        shutil.copy(SCRIPT, script_copy)
+        result = subprocess.run(
+            [sys.executable, str(script_copy), 'v1.20261106.100'],
+            cwd=self.scratch, capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('suffix above 99', result.stderr)
+        for name, contents in before.items():
+            self.assertEqual((self.scratch / name).read_bytes(), contents)
 
     def test_command_line_round_trip(self):
         """The script as the workflow calls it exits 0 and reports both files."""

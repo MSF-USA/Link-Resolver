@@ -872,7 +872,11 @@ impl RedirectApp {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if primary_button(ui, idle, "Resolve", palette)
-                    .on_hover_text("Find the destination of every link (Ctrl+Enter).")
+                    .on_hover_text(if cfg!(target_os = "macos") {
+                        "Find the destination of every link (Cmd+Enter)."
+                    } else {
+                        "Find the destination of every link (Ctrl+Enter)."
+                    })
                     .clicked()
                 {
                     self.start_resolution(ui.ctx());

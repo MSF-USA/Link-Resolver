@@ -17,6 +17,19 @@ If it says "Permission denied", give your copy execute permission:
   chmod +x link-resolver
 Then run it again. Neither command needs administrator permission.
 
+MACOS
+Published downloads require macOS 13+ and Apple Silicon (M1, M2, M3 and later).
+Archive names ending macos-arm64 are for Apple Silicon; macos-x64 is for Intel
+(available as a source-build option, not currently published).
+Extract the matching GUI ZIP and double-click Link Resolver.app.
+You can keep it in Downloads; moving it to Applications is optional.
+The macOS build is ad-hoc signed, not Developer ID signed
+or notarized, so macOS may block it as coming from an unidentified developer.
+Only if you trust the download, try opening it, then use System Settings >
+Privacy & Security > Open Anyway and follow the confirmation prompts.
+Your organization's policies may prevent this or require administrator approval.
+Do not disable Gatekeeper or remove quarantine protections globally.
+
 THE WINDOW
 Paste links into the text box, one per line, or click "Load file".
 "Load file" accepts a text file with one link per line, or a CSV or TSV
@@ -58,13 +71,14 @@ size, or reduce motion. Your choices and the window size are remembered.
 Tab moves between the controls; Enter or Space presses the highlighted one.
 Ctrl+Enter starts resolving while you are typing in the text box.
 Ctrl and + makes everything larger, Ctrl and - smaller, Ctrl and 0 resets.
+On macOS, use Cmd instead of Ctrl for these shortcuts.
 By default the window follows your system's light or dark mode.
 The window works with screen readers such as NVDA, Narrator and Orca.
 
 OPTIONAL COMMAND-LINE USAGE
 Windows:
   link-resolver-cli.exe --file urls.txt --output results.csv
-Linux:
+Linux/macOS:
   ./link-resolver-cli --file urls.txt --output results.csv
 CSV files work too; add --column NAME when the file has several link columns.
 Use --help for more options and --version to see which release you have.
@@ -74,3 +88,4 @@ Linux needs a normal desktop session (X11 or Wayland) with OpenGL support and
 glibc 2.28 or newer. File dialogs use the desktop's XDG portal. If file dialogs
 are unavailable, you can still paste links into the box and copy results out.
 The optional command-line program also works without a graphical desktop.
+macOS uses native file dialogs and the system's OpenGL support.

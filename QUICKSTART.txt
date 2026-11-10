@@ -18,9 +18,9 @@ If it says "Permission denied", give your copy execute permission:
 Then run it again. Neither command needs administrator permission.
 
 MACOS
-Published downloads require macOS 13+ and Apple Silicon (M1, M2, M3 and later).
-Archive names ending macos-arm64 are for Apple Silicon; macos-x64 is for Intel
-(available as a source-build option, not currently published).
+Published downloads require macOS 13 or newer on either processor architecture.
+Archive names ending macos-arm64 are for Apple Silicon (M1 and later);
+macos-x64 is for Intel. Check About This Mac if you are unsure which to choose.
 Extract the matching GUI ZIP and double-click Link Resolver.app.
 You can keep it in Downloads; moving it to Applications is optional.
 The macOS build is ad-hoc signed, not Developer ID signed

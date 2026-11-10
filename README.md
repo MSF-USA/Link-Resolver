@@ -31,11 +31,11 @@ PowerShell.
 An internet connection and permission to run downloaded applications are needed.
 Company security policies can still block unsigned executables.
 
-Published releases also include Apple Silicon macOS archives:
+Published releases also include macOS archives for both processor architectures:
 `link-resolver-gui-macos-arm64.zip` (desktop app + CLI) and
-`link-resolver-macos-arm64.zip` (terminal only). They target macOS 13+ and are
-ad-hoc signed, **not Developer ID signed or notarized**. Intel Macs are not
-supported by these downloads.
+`link-resolver-macos-arm64.zip` (terminal only) for Apple Silicon;
+`link-resolver-gui-macos-x64.zip` and `link-resolver-macos-x64.zip` for Intel.
+All target macOS 13+ and are ad-hoc signed, **not Developer ID signed or notarized**.
 
 - **Windows (64-bit):** open `link-resolver.exe` by double-clicking it.
 - **Linux (x86-64):** launch `link-resolver` from your desktop's file manager,
@@ -44,7 +44,8 @@ supported by these downloads.
   OpenGL support is required. Linux file pickers use the desktop's XDG portal.
   If no portal is available, URLs can still be pasted into the text box and
    results copied to the clipboard.
-- **macOS (Apple Silicon, macOS 13+):** extract the ZIP and double-click
+- **macOS (Apple Silicon or Intel, macOS 13+):** choose the `arm64` ZIP for Apple
+  Silicon or `x64` for Intel, extract it and double-click
   `Link Resolver.app`. It can run from Downloads; moving it to Applications is
   optional. Gatekeeper may block it. Only if you trust the download, attempt to
   open it and then use **System Settings > Privacy & Security > Open Anyway**.
@@ -171,8 +172,10 @@ deployment version, system-only dynamic dependencies and the CLI version, then
 ad-hoc signs and verifies the app and CLIs. It writes both macOS ZIPs and
 `SHA256SUMS-macos-arm64` into `dist/`, leaving other platforms' archives alone.
 An Intel build is supported explicitly with `--target x86_64-apple-darwin`
-(install that Rust target first); published releases currently ship Apple Silicon
-only. `--deployment-target MAJOR.MINOR` changes the build baseline and bundle
+(install that Rust target first); this writes the two `macos-x64.zip` archives
+and `SHA256SUMS-macos-x64`. Published releases build each architecture on a native
+Mac runner, both with the same macOS 13.0 minimum.
+`--deployment-target MAJOR.MINOR` changes the build baseline and bundle
 metadata; compatibility with an older OS must be tested on that OS. Cross-CPU
 packaging requires the host to be able to run the built CLI for its version check.
 The GUI still uses Apple's deprecated but available OpenGL implementation.
@@ -219,7 +222,7 @@ target Windows 10/11 x64. Other CPU architectures require their own builds.
 GitHub Actions in `.github/workflows/` run on every push and pull request:
 
 - **CI** (`ci.yml`): rustfmt, clippy with warnings as errors (GUI and CLI-only builds),
-   the full test suite and the script tests on Linux, Windows and Apple Silicon macOS,
+   the full test suite and the script tests on Linux, Windows and both macOS architectures,
    release binaries (macOS app/CLI archives) whose
   binaries are kept for a week, and a build on the minimum Rust version. Windows is where
   the PowerShell script test runs.
@@ -228,7 +231,7 @@ GitHub Actions in `.github/workflows/` run on every push and pull request:
   each with its reason and removal condition, in `.cargo/audit.toml`.
 - **Release** (`release.yml`): manual only, never on a push to `main`. Builds the Linux
   archives with `packaging/package-dist.sh --linux-only` and the Windows archives natively
-   on a Windows runner with `packaging/package-windows.ps1`, plus Apple Silicon macOS
+   on a Windows runner with `packaging/package-windows.ps1`, plus Apple Silicon and Intel macOS
    archives with `packaging/package-macos.py`. It runs every test suite on all three
   (loopback servers only, no real URLs), then tags and publishes a GitHub release with
   generated notes and the SHA-256 table. Versions are `v1.DATE`: `v1.20261106` for the

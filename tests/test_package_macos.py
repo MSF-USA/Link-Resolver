@@ -187,6 +187,89 @@ class MacOSPackagingTests(unittest.TestCase):
                 self.assertRaisesRegex(ValueError, 'no macOS deployment version'):
             packager.check_binary(binary, 'arm64', '13.0', self.root)
 
+    def test_late_signing_failure_preserves_existing_release_and_checksums(self):
+        """Failure on the terminal CLI after staging the GUI cannot replace prior downloads."""
+        archives = self.build()
+        checksums = self.root / 'dist/SHA256SUMS-macos-arm64'
+        before = {path: path.read_bytes() for path in [*archives, checksums]}
+        (self.root / 'Cargo.toml').write_text(
+            '[package]\nversion = "1.20261111.0"\n', encoding='utf-8',
+        )
+
+        def late_failure(arguments, root, env=None):
+            output = self.tool(arguments, root, env)
+            if arguments[-1] == '--version':
+                return 'Link Resolver 1.20261111.0'
+            if arguments[0] == 'codesign' and pathlib.Path(arguments[-1]).parent.name == 'terminal':
+                raise subprocess.CalledProcessError(1, arguments, stderr='terminal signing failed')
+            return output
+
+        with mock.patch.object(packager.sys, 'platform', 'darwin'), \
+                mock.patch.object(packager.shutil, 'which', return_value='/fake/tool'), \
+                mock.patch.object(packager, 'run', side_effect=late_failure), \
+                mock.patch.object(packager, 'icon_bytes', return_value=b'fixture icon'), \
+                self.assertRaises(subprocess.CalledProcessError):
+            packager.package(self.root, 'aarch64-apple-darwin', '13.0')
+        for path, contents in before.items():
+            self.assertEqual(path.read_bytes(), contents, path.name)
+        self.assertFalse(list((self.root / 'target').glob('macos-staging-*')))
+        self.assertFalse(list((self.root / 'dist').glob('.macos-publish-*')))
+
+    def test_publish_rolls_back_partial_replacement_for_existing_and_new_files(self):
+        """An I/O failure on either remaining file restores the entire prior release set."""
+        sources = self.root / 'staged'
+        sources.mkdir()
+        files = [sources / name for name in ('gui.zip', 'terminal.zip', 'SHA256SUMS')]
+        for source in files:
+            source.write_bytes(b'new ' + source.name.encode())
+        replace = pathlib.Path.replace
+        for existing in (False, True):
+            for failed_name in ('terminal.zip', 'SHA256SUMS'):
+                with self.subTest(existing=existing, failure=failed_name):
+                    dist = self.root / f'dist-{existing}-{failed_name}'
+                    dist.mkdir()
+                    unrelated = dist / 'linux.tar.gz'
+                    unrelated.write_bytes(b'unrelated archive')
+                    if existing:
+                        for source in files:
+                            (dist / source.name).write_bytes(b'old ' + source.name.encode())
+                    before = {path.name: path.read_bytes() for path in dist.iterdir()}
+
+                    def failing_replace(source, destination):
+                        if source.parent.name.startswith('.macos-publish-') \
+                                and pathlib.Path(destination).name == failed_name:
+                            raise OSError('injected replacement failure')
+                        return replace(source, destination)
+
+                    with mock.patch.object(pathlib.Path, 'replace', new=failing_replace), \
+                            self.assertRaisesRegex(OSError, 'replacement failure'):
+                        packager.publish_files(files, dist)
+                    after = {path.name: path.read_bytes() for path in dist.iterdir()}
+                    self.assertEqual(after, before)
+
+    def test_successful_rebuild_publishes_matching_archives_and_checksums(self):
+        """A complete rebuild replaces the prior metadata and publishes matching new hashes."""
+        self.build()
+        (self.root / 'Cargo.toml').write_text(
+            '[package]\nversion = "1.20261111.0"\n', encoding='utf-8',
+        )
+
+        def updated_version(arguments, root, env=None):
+            output = self.tool(arguments, root, env)
+            return 'Link Resolver 1.20261111.0' if arguments[-1] == '--version' else output
+
+        with mock.patch.object(packager.sys, 'platform', 'darwin'), \
+                mock.patch.object(packager.shutil, 'which', return_value='/fake/tool'), \
+                mock.patch.object(packager, 'run', side_effect=updated_version), \
+                mock.patch.object(packager, 'icon_bytes', return_value=b'fixture icon'):
+            archives = packager.package(self.root, 'aarch64-apple-darwin', '13.0')
+        with zipfile.ZipFile(archives[0]) as archive:
+            metadata = plistlib.loads(archive.read('link-resolver/Link Resolver.app/Contents/Info.plist'))
+            self.assertEqual(metadata['CFBundleShortVersionString'], '1.20261111.0')
+        sums = (self.root / 'dist/SHA256SUMS-macos-arm64').read_text()
+        for archive in archives:
+            self.assertIn(f'{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n', sums)
+
     def test_icon_contains_valid_pngs_at_all_declared_sizes(self):
         """The generated ICNS has decodable PNG payloads, alpha and the brand red pixels."""
         data = packager.icon_bytes()

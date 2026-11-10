@@ -44,7 +44,7 @@ def run(arguments, root, env=None):
 
 def check_binary(binary, architecture, deployment_target, root):
     """Validate a Mach-O's CPU, OS baseline and system-only dependencies; raise ValueError."""
-    run(['lipo', '-verify_arch', architecture, str(binary)], root)
+    run(['lipo', str(binary), '-verify_arch', architecture], root)
     dependencies = run(['otool', '-L', str(binary)], root)
     for line in dependencies.splitlines()[1:]:
         library = line.strip().split(' (', 1)[0]
